@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}blog | {{ SITETITLE }} {% endblock %}
+{% block content_title %}{% endblock %}
+{% block content %}
+{% if articles %}
+    <section id="content" class="body">
+    <ol id="posts-list" class="hfeed">
+        <h1>{% block page_title %}blog{% endblock %}</h1>
+        <hr />
+    {% for article in articles_page.object_list %}
+        <li><article class="hentry">
+            <header>
+                <h1><a href="{{ SITEURL }}/{{ article.url }}" rel="bookmark"
+                    title="Permalink to {{ article.title|striptags }}">{{ article.title }}</a></h1>
+            </header>
+
+            <div class="entry-content">
+            {% include 'article_infos.html' %}
+            {{ article.summary }}
+            <a class="readmore" href="{{ SITEURL }}/{{ article.url }}">read more</a>
+            {% include 'comments.html' %}
+            </div><!-- /.entry-content -->
+        </article></li>
+        {% if loop.last %}
+            </ol><!-- /#posts-list -->
+            {% if articles_page.has_other_pages() %}
+                {% include 'pagination.html' %}
+            {% endif %}
+        </section><!-- /#content -->
+        {% endif %}
+    {% endfor %}
+{% else %}
+<section id="content" class="body">
+    {% if pages %}
+    <h2>Pages</h2>
+    <ul>
+    {% for page in pages %}
+        <li><a href="{{ SITEURL }}/{{ page.url }}">{{ page.title }}</a></li>
+    {% endfor %}
+    </ul>
+    {% else %}
+    <p>This site currently has no content.</p>
+    {% endif %}
+</section>
+{% endif %}
+{% endblock content %}

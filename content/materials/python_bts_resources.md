@@ -1,0 +1,16 @@
+Title: Python behind the scenes: a list of resources
+Save_as: materials/python-behind-the-scenes-a-list-of-resources.html
+Url: materials/python-behind-the-scenes-a-list-of-resources/
+
+This is a collection of documents, posts and talks that I found useful while studying CPython and working on the [CPython behind the scenes]({tag}/Python behind the scenes) series. There are some really good resources, but I couldn't find answers to many of my questions. That's why I eventually decided to share my own experience of working through the CPython's source code.
+
+* [Python Documentation](https://docs.python.org/3.9/). Python documentation is the first place to go to for almost any Python-related topic. While it lacks a special part covering internals of the interpreter, [Python/C API reference](https://docs.python.org/3.9/c-api/index.html) describes CPython's public interfaces and some of the implementation details. It's accompanied by [the tutorial for C programmers](https://docs.python.org/3.9/extending/index.html#extending-index), which shows how to extend a Python program with C or to embed Python inside a C application. I bet you'll understand how CPython works quite well just by accomplishing thoughtfully one of these tasks.
+
+* [PEPs](https://www.python.org/dev/peps/). You won't find a PEP that describes the overall design of the interpreter, but most of the major changes to the language have a corresponding proposal. PEPs are great. They provide you with both technical and historical contexts. Authors of documentation have a good habit of referencing a relevant PEP when appropriate. For example, Python/C API reference mentions at least once [PEP 432](https://www.python.org/dev/peps/pep-0432/) that describes a transition to a new CPython initialization sequence and [PEP 587](https://www.python.org/dev/peps/pep-0587/), which is its partial implementation.
+* [Inside The Python Virtual Machine](https://leanpub.com/insidethepythonvirtualmachine) book by Obi Ike-Nwosu. The most comprehensive and, as I can judge, accurate source on the CPython internals.
+* [Your Guide to the CPython Source Code](https://docs.python.org/3.9/extending/index.html#extending-index) by Anthony Shaw. The post's title speaks for itself. If you want to dig into the source code straight away, this should be your choice!
+* [Python’s Innards series](https://tech.blog.aknin.name/category/my-projects/pythons-innards/) by Yaniv Aknin. Covers the early versions of the CPython 3 VM.
+* [Python internals](https://eli.thegreenplace.net/tag/python-internals) posts by Eli Bendersky. The posts covering symbol tables are especially good.
+* [A Python Interpreter Written in Python](http://aosabook.org/en/500L/a-python-interpreter-written-in-python.html) by Allison Kaptur. The article describes a toy Python VM that is able to execute real Python bytecode. It might be useful as a first indroduction to the interpreter. I don't see a good reason, though, to spend much time studing a toy example when CPython itself is not overwhelmingly complicated.
+* [To GIL or not to GIL](https://www.youtube.com/watch?v=7RlqbHCCVyc) talk by Eric Snow. The main theme of the talk is subinterpretes. What I like about it is how Eric gives an overview of CPython architecture in the beginning.
+
