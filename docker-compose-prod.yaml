@@ -1,0 +1,13 @@
+version: '3'
+services:
+    nginx:
+        restart: always
+        volumes:
+            - ./etc/nginx.conf:/etc/nginx/service.conf
+        ports:
+            - 80:80
+            - 443:443
+        environment:
+            - LETSENCRYPT=true
+            - LE_EMAIL=victor@tenthousandmeters.com
+            - LE_FQDN=tenthousandmeters.com

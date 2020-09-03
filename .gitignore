@@ -7,3 +7,5 @@
 *.py[co]
 
 # project specific
+
+/etc/ssl/
