@@ -15,22 +15,22 @@ Have you ever wondered what `python` does when you run one of your programs?
 $ python script.py 
 ```
 
-This article opens a series which seeks to answer this very question. We'll dive into the internals of CPython – Python's most popular implementation. By doing so we'll understand the language itself at a deeper level. That is the primary goal of this series. If you're familiar with Python and comfortable reading C but have no much experience working with CPython's source code, there is a good chance you may find this writing interesting.
+This article opens a series which seeks to answer this very question. We'll dive into the internals of CPython, Python's most popular implementation. By doing so we'll understand the language itself at a deeper level. That is the primary goal of this series. If you're familiar with Python and comfortable reading C but have no much experience working with CPython's source code, there is a good chance you'll find this writing interesting.
 
 ### What CPython is and why anyone would want to study it
 
 Let's begin by stating some well-known facts. CPython is a Python interpreter written in C. It's one of the Python implementations, alongside with PyPy, Jython, IronPython and many others. CPython is distinguished in that it is original, most-maintained and the most popular one.
 
-CPython implements Python, but what is Python? One may simply answer – Python is a programming language. The answer becomes much more nuanced when the same question is put properly: what defines what Python is? Python, unlike languages like C, doesn't have a formal specification. The thing that comes closest to it is the Python Language Reference which starts with the following words:
+CPython implements Python, but what is Python? One may simply answer – Python is a programming language. The answer becomes much more nuanced when the same question is put properly: what defines what Python is? Python, unlike languages like C, doesn't have a formal specification. The thing that comes closest to it is the [Python Language Reference](https://docs.python.org/3.9/reference/index.html) which starts with the following words:
 
 > While I am trying to be as precise as possible, I chose to use English rather than formal specifications for everything except syntax and lexical analysis. This should make the document more understandable to the average reader, but will leave room for ambiguities. Consequently, if you were coming from Mars and tried to re-implement Python from this document alone, you might have to guess things and in fact you would probably end up implementing quite a different language. On the other hand, if you are using Python and wonder what the precise rules about a particular area of the language are, you should definitely be able to find them here.
 
-So Python is not defined by its language reference only. It would be also wrong to say that Python is defined by its reference implementation, CPython, since there are some implementation details that are not a part of the language. A garbage collector that relies on a reference counting is one example.
+So Python is not defined by its language reference only. It would be also wrong to say that Python is defined by its reference implementation, CPython, since there are some implementation details that are not a part of the language. A garbage collector that relies on a reference counting is one example. Since there is no single source of truth, we may say that Python is defined partly by the Python Language Reference and partly by its main implementation, CPython.
 
-Since there is no single source of truth we may say that Python is defined partly by the Python Language Reference and partly by its main implementation, CPython. This conclusion highlights the key role of the latter. You may still wonder, though, why you should care to learn how Python is implemented. Besides plane curiosity, I see the following reasons:
+Such a reasoning may seem pedantic, but I think it is crucial to clarify the key role of the subject we're going to study. You might still wonder, though, why we should study it. Besides plane curiosity, I see the following reasons:
 
 * Having a full picture gives a deeper understanding of the language. It's much more easier to grasp some peculiarity of Python if you're aware of its implementation details.
-* Implementation details matter. How objects are stored and how the garbage collector works are subjects of high importance in practice.
+* Implementation details matter in practice. How objects are stored, how the garbage collector works and how multiple threads are coordinated are subjects of high importance when one wants to understand the of applicability of the language and its limitations, estimate performance or detect inefficiencies.
 * CPython provides Python/C API which allows to extend Python with C and embed Python inside C. To use this API effectively a programmer needs a good understanding of how CPython works.
 
 ### What it takes to understand how CPython works
@@ -39,7 +39,7 @@ CPython was designed to be easy to maintain. A newcomer can certainly expect to 
 
 ### How this series is laid out
 
-I chose to take a top-down approach. In this part we'll explore the core concepts of the CPython virtual machine (VM). Next, we'll see how CPython compiles your program into something that the VM can execute. After that, we'll get familiar with the source code and step through the execution of a program studying main parts of the interpreter on the way. Eventually, we'll be able to pick out different aspects of the language one by one and see how they're implemented. This is by no way a strict plan but my approximate idea.
+I chose to take a top-down approach. In this part we'll explore the core concepts of the CPython virtual machine (VM). Next, we'll see how CPython compiles a program into something that the VM can execute. After that, we'll get familiar with the source code and step through the execution of a program studying main parts of the interpreter on the way. Eventually, we'll be able to pick out different aspects of the language one by one and see how they're implemented. This is by no way a strict plan but my approximate idea.
 
 **Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
@@ -53,7 +53,7 @@ An execution of a Python program roughly consists of three stages:
 
 During initialization stage, CPython initializes data structures required to run Python. It also prepares such things as builtin types, configures and loads builtin modules, sets up the import system and does many other things. This is very important stage that is often overlooked by the CPython's explorers because of its service nature.
 
-Next comes the compilation stage. CPython is an interpreter, not a compiler in a sense that it doesn't produce machine code. Interpreters, however, usually translate source code into some intermediate representation before executing it. So does CPython. This translation phase does the same things a typical compiler does: parses source code into a parse tree, converts a parse tree to an AST (Abstract Syntax Tree), emits bytecode based on AST and even performs some bytecode optimizations.
+Next comes the compilation stage. CPython is an interpreter, not a compiler in a sense that it doesn't produce machine code. Interpreters, however, usually translate source code into some intermediate representation before executing it. So does CPython. This translation phase does the same things a typical compiler does: parses a source code and builds an AST (Abstract Syntax Tree), generates bytecode from an AST and even performs some bytecode optimizations.
 
 Before looking at the next stage, we need to understand what bytecode is. Bytecode is a series of instructions. Each instruction consists of two bytes: one for an opcode and one for an argument. Consider an example:
 
@@ -83,7 +83,7 @@ Such a brief overview gives rise to a lot of questions:
 * Does the VM places values or references to the objects on the stack?
 * How does CPython know that `x` is a local variable?
 * What if an argument is too big to fit into a single byte?
-* Is instruction for adding up two numbers the same as for concatinating two strings? If yes, then how does the VM differentiate between these operations?
+* Is instruction for adding up two numbers the same as for concatenating two strings? If yes, then how does the VM differentiate between these operations?
 
 In order to answer these and other intriguing questions we need to look at the core concepts of the CPython VM.
 
@@ -120,9 +120,9 @@ What does its bytecode look like? To answer this question, let's analyze what th
            22 RETURN_VALUE
 ```
 
-On line one we define function `f` by making a function from something called code object and binding name `f` to it. We don't see the bytecode of the function `f` that returns incremented argument.
+On line one we define function `f` by making a function from something called code object and binding name `f` to it. We don't see the bytecode of the function `f` that returns an incremented argument.
 
-The pieces of code that are executed as a single unit like a module or a function body are called code blocks. CPython stores information about what a code block does in a structure called code object. It contains the bytecode and such things as lists of variables' names used within the block. To run a module or to call a function means to start evaluating a corresponding code object.
+The pieces of code that are executed as a single unit like a module or a function body are called code blocks. CPython stores information about what a code block does in a structure called code object. It contains the bytecode and such things as lists of names of variables used within the block. To run a module or to call a function means to start evaluating a corresponding code object.
 
 #### function object
 
@@ -144,7 +144,7 @@ add_4 = make_add_x(4)
 add_5 = make_add_x(5)
 ```
 
-Functions `add_4` and `add_5` are the result of calling `MAKE_FUNCTION` instruction with the same code object as an argument. But there is one argument that differs – the value of `x`. Each function gets its own by the mechanism of cell variables that allows us to create closures like `add_4` and `add_5`. 
+The bytecode of the `make_add_x` function contains a `MAKE_FUNCTION` instruction. The functions `add_4` and `add_5` are the result of calling this instruction with the same code object as an argument. But there is one argument that differs – the value of `x`. Each function gets its own by the mechanism of cell variables that allows us to create closures like `add_4` and `add_5`. 
 
 I recommend you to take a look at the definitions of the code and function objects before we move to the next concept.
 
@@ -223,7 +223,7 @@ struct _frame {
 };
 ```
 
-The first frame is created to execute a module's code object. Whenever it needs to execute another code object, CPython creates a new frame. Each frame has a reference to the previous frame. Thus, frames form a stack of frames, also known as the call stack, with the current frame sitting on top. When a function is called, a new frame is pushed on the stack. On return from the currently executing frame, CPython continues execution of the previous frame by remembering its last processed instruction. In some sense the CPython VM does nothing but constructs and executes the frames. But as we'll soon see, this summary, to put it mildly, hides some details.
+The first frame is created to execute a module's code object. CPython creates a new frame whenever it needs to execute another code object. Each frame has a reference to the previous frame. Thus, frames form a stack of frames, also known as the call stack, with the current frame sitting on top. When a function is called, a new frame is pushed on the stack. On return from the currently executing frame, CPython continues execution of the previous frame by remembering its last processed instruction. In some sense the CPython VM does nothing but constructs and executes the frames. But as we'll soon see, this summary, to put it mildly, hides some details.
 
 ### Threads, interpreters, runtime
 
@@ -255,9 +255,9 @@ t.start()
 t.join()
 ```
 
-`t.start()` actually creates a new OS thread by calling the OS function (`pthread_create` on UNIX-like systems and ``_beginthreadex` on Windows). The newly created thread invokes the function from the `_thread` module that is responsible for calling the target. This function receives not only the target and the target's arguments but also a new thread state to be used within a new OS thread. An OS thread enters the evaluation loop with its own thread state, thus having it at hand.
+`t.start()` actually creates a new OS thread by calling the OS function (`pthread_create` on UNIX-like systems and `_beginthreadex` on Windows). The newly created thread invokes the function from the `_thread` module that is responsible for calling the target. This function receives not only the target and the target's arguments but also a new thread state to be used within a new OS thread. An OS thread enters the evaluation loop with its own thread state, thus always having it at hand.
 
-We may remember here the famous GIL (Global Interpreter Lock) that prevents multiple threads to be in the evaluation loop at the same time. The major reason for that is to protect the state of CPython from corruption without indroducing more fine-grained locks. The Python/C API Reference explains the GIL clearly:
+We may remember here the famous GIL (Global Interpreter Lock) that prevents multiple threads to be in the evaluation loop at the same time. The major reason for that is to protect the state of CPython from corruption without introducing more fine-grained locks. [The Python/C API Reference](https://docs.python.org/3.9/c-api/index.html) explains the GIL clearly:
 
 > The Python interpreter is not fully thread-safe. In order to support multi-threaded Python programs, there’s a global lock, called the global interpreter lock or GIL, that must be held by the current thread before it can safely access Python objects. Without the lock, even the simplest operations could cause problems in a multi-threaded program: for example, when two threads simultaneously increment the reference count of the same object, the reference count could end up being incremented only once instead of twice.
 
@@ -300,4 +300,12 @@ In this part we've outlined what `python` does to execute a Python program. We'v
 The part of the interpreter that is responsible for bytecode execution is called a virtual machine. The CPython VM has several particularly important concepts: a code object, a frame object, a thread state, an interpreter state and the runtime. These data structures form a core of the CPython architecture. 
 
 We haven't covered a lot of things. We avoided digging into the source code. The initialization and compilation stages were completly out of our scope. Instead, we started with the broad overview of the VM. In this way, I think, we can better see the responsibilities of each stage. Now we know what CPython compiles source code to – to the code object. Next time we'll see how it does that.
+
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+
+<br>
+
+**Update 4 September 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals
 
