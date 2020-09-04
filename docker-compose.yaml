@@ -16,5 +16,5 @@ services:
         ports:
             - 80:80
         environment:
-            - TZ=America/Chicago
+            - TZ=UTC
             - LETSENCRYPT=false

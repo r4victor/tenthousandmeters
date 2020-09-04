@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*- #
 
+# General
+
 AUTHOR = 'Victor Skvortsov'
 SITENAME = 'Ten thousand meters'
 SITESUBTITLE = 'Diving deep, flying high to see why'
 SITEURL = ''
-
-PATH = 'content'
 
 TIMEZONE = 'Europe/London'
 
@@ -19,17 +19,18 @@ TRANSLATION_FEED_ATOM = None
 AUTHOR_FEED_ATOM = None
 AUTHOR_FEED_RSS = None
 
-# # Social widget
+# Social widget
 # SOCIAL = (('GitHub', 'https://github.com/r4victor'),)
-# GITHUB_URL = 'https://github.com/r4victor'
 
-DEFAULT_PAGINATION = False
+GOOGLE_ANALYTICS = 'UA-65327549-5'
 
-# General
+PATH = 'content'
 
 DELETE_OUTPUT_DIRECTORY = True
 
 # View
+
+DEFAULT_PAGINATION = False
 
 DISPLAY_CATEGORIES_ON_MENU = False
 DISPLAY_PAGES_ON_MENU = False
