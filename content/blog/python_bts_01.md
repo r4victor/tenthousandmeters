@@ -27,7 +27,7 @@ CPython implements Python, but what is Python? One may simply answer – Python 
 
 So Python is not defined by its language reference only. It would be also wrong to say that Python is defined by its reference implementation, CPython, since there are some implementation details that are not a part of the language. A garbage collector that relies on a reference counting is one example. Since there is no single source of truth, we may say that Python is defined partly by the Python Language Reference and partly by its main implementation, CPython.
 
-Such a reasoning may seem pedantic, but I think it is crucial to clarify the key role of the subject we're going to study. You might still wonder, though, why we should study it. Besides plane curiosity, I see the following reasons:
+Such a reasoning may seem pedantic, but I think it is crucial to clarify the key role of the subject we're going to study. You might still wonder, though, why we should study it. Besides plain curiosity, I see the following reasons:
 
 * Having a full picture gives a deeper understanding of the language. It's much more easier to grasp some peculiarity of Python if you're aware of its implementation details.
 * Implementation details matter in practice. How objects are stored, how the garbage collector works and how multiple threads are coordinated are subjects of high importance when one wants to understand the of applicability of the language and its limitations, estimate performance or detect inefficiencies.
@@ -75,7 +75,7 @@ CPython translates the body of the function `g` to the following sequence of byt
 
 At the heart of CPython is a virtual machine that executes bytecode. By looking at the previous example you might guess how it works. CPython's VM is stack-based. It means that it executes instructions using the stack to store and retrieve data. `LOAD_FAST` instruction pushes local variable on the stack. `LOAD_CONST` pushes a constant. `BINARY_ADD` pops two objects from the stack, adds them up and pushes the result back. Finally, `RETURN_VALUE` pops whatever is on the stack and returns the result to its caller.
 
-The bytecode execution happens in a giant evaluation loop that runs until there are instructions to execute. It stops to yield a value or if an error occured.
+The bytecode execution happens in a giant evaluation loop that runs while there are instructions to execute. It stops to yield a value or if an error occured.
 
 Such a brief overview gives rise to a lot of questions:
 
