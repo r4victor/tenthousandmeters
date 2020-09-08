@@ -1,25 +1,32 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*- #
 
+import os
+
 # General
 
 AUTHOR = 'Victor Skvortsov'
 SITENAME = 'Ten thousand meters'
 SITESUBTITLE = 'Diving deep, flying high to see why'
-SITEURL = ''
+SITEURL = os.getenv('SITEURL', '')
 
 TIMEZONE = 'Europe/London'
 
 DEFAULT_LANG = 'en'
 
 # Feed generation is usually not desired when developing
-FEED_ALL_ATOM = None
+FEED_DOMAIN = SITEURL
+FEED_ATOM = 'feeds/atom.xml'
+FEED_ALL_ATOM = 'feeds/all.atom.xml'
+TAG_FEED_ATOM = 'tag/{slug}/feeds/atom.xml'
+TAG_FEED_ATOM_URL = 'tag/{slug}/feeds/atom.xml'
 CATEGORY_FEED_ATOM = None
 TRANSLATION_FEED_ATOM = None
 AUTHOR_FEED_ATOM = None
 AUTHOR_FEED_RSS = None
 
 # Social widget
+SOCIAL_WIDGET_NAME = 'follow'
 # SOCIAL = (('GitHub', 'https://github.com/r4victor'),)
 
 GOOGLE_ANALYTICS = 'UA-65327549-5'

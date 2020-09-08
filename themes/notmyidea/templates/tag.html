@@ -1,3 +1,6 @@
 {% extends "index.html" %}
 {% block title %}{{ SITENAME }} - {{ tag }}{% endblock %}
+{% block extra_head %}
+        <link href="{{ FEED_DOMAIN }}/{% if TAG_FEED_ATOM_URL %}{{ page_name }}feeds/atom.xml{% endif %}" type="application/atom+xml" rel="alternate" title="{{ SITENAME }} tag «{{ tag }}» Atom Feed" />
+{% endblock extra_head %}
 {% block page_title %} tag «{{ tag }}» {% endblock %}
