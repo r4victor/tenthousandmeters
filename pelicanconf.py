@@ -35,6 +35,8 @@ PATH = 'content'
 
 DELETE_OUTPUT_DIRECTORY = True
 
+PLUGINS = ['plugins.pelican_plugin-render_math.render_math']
+
 # View
 
 DEFAULT_PAGINATION = False
