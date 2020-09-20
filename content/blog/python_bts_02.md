@@ -1,7 +1,6 @@
 Title: Python behind the scenes #2: how the CPython compiler works
-Date: 2020-09-06 10:50
+Date: 2020-09-20 5:48
 Tags: Python behind the scenes, Python, CPython
-Status: Draft
 Summary: In [the first post]({filename}/blog/python_bts_01.md) of the series we've looked at the CPython VM. We've learned that it works by executing a series of instructions called bytecode. We've also seen that Python bytecode is not sufficient to fully describe what a piece of code does. That's why there exists a notion of a code object. To execute a code block such as a module or a function means to execute a corresponding code object. A code object contains block's bytecode, constants and names of variables used in the block and block's various properties. <br><br>Typically, a Python programmer doesn't write bytecode and doesn't create the code objects but writes a normal Python code. So CPython must be able to create a code object from a source code. This job is done by the CPython compiler. In this part we'll explore how it works.
 
 ### Today's subject
@@ -16,11 +15,11 @@ Typically, a Python programmer doesn't write bytecode and doesn't create the cod
 
 We understood what the responsibilities of the CPython compiler are, but before looking at how it is implemented, let's figure out why we call it a compiler in the first place?
 
-A compiler, in its general sense, is a program that translates a program in one language into an equivalent program in another language. There are many types of compilers, but most of the times by a compiler we mean a static compiler, which translates a program in a high-level language to a machine code. Does CPython have something in common with this type of a compiler? To answer this question, let's take a look at the traditional three-stage design of a static compiler.
+A compiler, in its general sense, is a program that translates a program in one language into an equivalent program in another language. There are many types of compilers, but most of the times by a compiler we mean a static compiler, which translates a program in a high-level language to a machine code. Does the CPython compiler have something in common with this type of a compiler? To answer this question, let's take a look at the traditional three-stage design of a static compiler.
 
 <img src="{static}/blog/python_bts_02/diagram1.png" alt="diagram1" style="zoom:50%; display: block; margin: 0 auto;" />
 
-The frontend of a compiler transforms a source code into some intermediate representation (IR). The optimizer then takes an IR, optimizes it and passes an optimized IR to the backend that generates machine code. If we choose an IR that is not specific to any source language and any target machine, then we get a key benefit of the three-stage design – for a compiler to support a new source language only an additional frontend is needed and to support a new target machine only an additional backend is needed.
+The frontend of a compiler transforms a source code into some intermediate representation (IR). The optimizer then takes an IR, optimizes it and passes an optimized IR to the backend that generates machine code. If we choose an IR that is not specific to any source language and any target machine, then we get a key benefit of the three-stage design: for a compiler to support a new source language only an additional frontend is needed and to support a new target machine only an additional backend is needed.
 
 The LLVM toolchain is a great example of a success of this model. There are frontends for C, Rust, Swift and many other programming languages that rely on LLVM to provide more complicated parts of the compiler. LLVM's creator, Chris Lattner, gives a good [overview of its architecture](http://aosabook.org/en/llvm.html).
 
@@ -28,26 +27,26 @@ CPython, however, doesn't need to support multiple source languages and target m
 
 <img src="{static}/blog/python_bts_02/diagram2.png" alt="diagram1" style="zoom:50%; display: block; margin: 0 auto;" />
 
-The picture above represent a classic model of a compiler. Now compare it to the architecture of the CPython compiler in the picture below.
+The picture above represents a model of a classic compiler. Now compare it to the architecture of the CPython compiler in the picture below.
 
 <img src="{static}/blog/python_bts_02/diagram3.png" alt="diagram1" style="zoom:50%; display: block; margin: 0 auto;" />
 
-Looks similar, isnt't it? The point here is that the structure of the CPython compiler should be familiar to anyone who studied compilers before. If you didn't, a famous [Dragon Book](https://en.wikipedia.org/wiki/Compilers:_Principles,_Techniques,_and_Tools) is an excellent introduction to the theory of compiler construction. It's long, but you'll benefit even by reading only the first few chapters.
+Looks similar, isn't it? The point here is that the structure of the CPython compiler should be familiar to anyone who studied compilers before. If you didn't, a famous [Dragon Book](https://en.wikipedia.org/wiki/Compilers:_Principles,_Techniques,_and_Tools) is an excellent introduction to the theory of compiler construction. It's long, but you'll benefit even by reading only the first few chapters.
 
 The comparison we've made requires several comments. First, since version 3.9, CPython uses a new parser by default that outputs an AST (Abstract Syntax Tree) straight away without an intermediate step of building a parse tree. Thus, the model of the CPython compiler is simplified even further. Second, some of the presented phases of the CPython compiler do so little compared to their counterparts of the static compilers that some may say that the CPython compiler is no more than a frontend. We won't take this view of the hardcore compiler writers.
 
 ### Overview of the compiler's architecture
 
-The diagrams are nice, but they hide many details and can be misleanding, so let's spend some time discussing the overall design of the CPython compiler.
+The diagrams are nice, but they hide many details and can be misleading, so let's spend some time discussing the overall design of the CPython compiler.
 
 The two major components of the CPython compiler are:
 
 1. the frontend; and
 2. the backend.
 
-The frontend takes a Python code and produces an AST. The backend takes an AST and produces a code object. Throughout CPython's source code the terms parser and compiler are used for the frontend and the backend respectively. This is yet another meaning of the word compiler. It was probably better to call it something like a code object generator, but we'll stick with the compiler since it doesn't seem to cause much trouble.
+The frontend takes a Python code and produces an AST. The backend takes an AST and produces a code object. Throughout the CPython source code the terms parser and compiler are used for the frontend and the backend respectively. This is yet another meaning of the word compiler. It was probably better to call it something like a code object generator, but we'll stick with the compiler since it doesn't seem to cause much trouble.
 
-The job of the parser is to check whether an input is a syntactically correct Python code. If it's not, then the parser reports an error like the following:
+The job of the parser is to check whether the input is a syntactically correct Python code. If it's not, then the parser reports an error like the following:
 
 ```python
 x = y = = 12
@@ -55,12 +54,12 @@ x = y = = 12
 SyntaxError: invalid syntax
 ```
 
-If an input is correct, then the parser organizes it according to the rules of the grammar. A grammar defines the syntax of a language. The notion of a formal grammar is so crucial for our discussion that, I think, we should digress a little to remember its formal definition.
+If the input is correct, then the parser organizes it according to the rules of the grammar. A grammar defines the syntax of a language. The notion of a formal grammar is so crucial for our discussion that, I think, we should digress a little to remember its formal definition.
 
 According to the classic definition, a grammar is a tuple of four items:
 
-* $N$ – a finite set of terminal symbols, or simply terminals (usually denoted by lowercase letters).
-* $\Sigma$ – a finite set of nonterminal symbols, or simply nonterminals (usually denoted by uppercase letters).
+* $\Sigma$ – a finite set of terminal symbols, or simply terminals (usually denoted by lowercase letters).
+* $N$ – a finite set of nonterminal symbols, or simply nonterminals (usually denoted by uppercase letters).
 * $P$ – a set of production rules. In the case of context-free grammars, which include the Python grammar, a production rule is just a mapping from a nonterminal to any sequence of terminals and nonterminals like $A \to aB$.
 * $S$ – one distinguished nonterminal.
 
@@ -115,7 +114,7 @@ struct _stmt {
             expr_ty value;
             string type_comment;
       	} Assign;
-      	// ... other kinds of expression
+      	// ... other kinds of statements
     } v;
   	int lineno;
     int col_offset;
@@ -126,13 +125,13 @@ struct _stmt {
 struct _expr {
     enum _expr_kind kind;
     union {
-      	// ... other kinds of expression
+      	// ... other kinds of expressions
       	struct {
             expr_ty func;
             asdl_seq *args;
             asdl_seq *keywords;
         } Call;
-      	// ... other kinds of expression
+      	// ... other kinds of expressions
     } v;
     // ... same as in _stmt
 };
@@ -140,7 +139,7 @@ struct _expr {
 
 An AST is a handy representation to work with. It tells what a program does, hiding all non-essential information such as indentation, punctuation and other Python's syntactic features.
 
-One of the main beneficiaries of the AST representation is the compiler, which can walk an AST and emit bytecode in a relatively straightforward manner. Many Python tools, besides the compiler, use the AST to work with a Python code. For example, pytest makes changes to an AST to provide useful information when the `assert` statement fails, which by itself does nothing but raises an `AssertionError` if the expression evaluates to `False`. Another example is Bandit that finds common security issues in Python code by analyzing an AST.
+One of the main beneficiaries of the AST representation is the compiler, which can walk an AST and emit bytecode in a relatively straightforward manner. Many Python tools, besides the compiler, use the AST to work with Python code. For example, [pytest](https://github.com/pytest-dev/pytest/) makes changes to an AST to provide useful information when the `assert` statement fails, which by itself does nothing but raises an `AssertionError` if the expression evaluates to `False`. Another example is [Bandit](https://github.com/PyCQA/bandit) that finds common security issues in Python code by analyzing an AST.
 
 Now, when we've studied the Python AST a little bit, we can look at how the parser builds it from a source code.
 
@@ -152,7 +151,7 @@ The two parser are very different. We'll focus on the new one but before discuss
 
 #### old parser
 
-For a long time the Python's syntax was formally defined by the generative grammar. It's a kind of grammar we've talked about earlier. It tells how to generate correct sequences in a language it defines. The problem is that a generative grammar doesn't directly corresponds to the parsing algorithm that would be able to parse sequences from the language the grammar defines. Fortunately, smart people have been able to distinguish classes of generative grammars for which the corresponding parser can be built. These include [context free](https://en.wikipedia.org/wiki/Context-free_grammar), [LL(k),](https://en.wikipedia.org/wiki/LL_grammar) [LR(k)](https://en.wikipedia.org/wiki/LR_parser), [LALR](https://en.wikipedia.org/wiki/LALR_parser) and many other types of grammars. The Python grammar is LL(1). It's specified using a kind of [Extended Backus–Naur Form](https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form) (EBNF). To get an idea on how it can be used to describe Python's syntax, take a look at the rules for the while statement.
+For a long time the Python's syntax was formally defined by the generative grammar. It's a kind of grammar we've talked about earlier. It tells us how to generate sequences belonging to the language. The problem is that a generative grammar doesn't directly corresponds to the parsing algorithm that would be able to parse those sequences. Fortunately, smart people have been able to distinguish classes of generative grammars for which the corresponding parser can be built. These include [context free](https://en.wikipedia.org/wiki/Context-free_grammar), [LL(k),](https://en.wikipedia.org/wiki/LL_grammar) [LR(k)](https://en.wikipedia.org/wiki/LR_parser), [LALR](https://en.wikipedia.org/wiki/LALR_parser) and many other types of grammars. The Python grammar is LL(1). It's specified using a kind of [Extended Backus–Naur Form](https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form) (EBNF). To get an idea on how it can be used to describe Python's syntax, take a look at the rules for the while statement.
 
 ```text
 file_input: (NEWLINE | stmt)* ENDMARKER
@@ -169,11 +168,11 @@ CPython extends the traditional notation with features like:
 * optional parts: [a]
 * zero or more and one or more repetitions: a* and a+.
 
-We can see [why Guido van Rossum chose to use regular expressions](https://www.blogger.com/profile/12821714508588242516). They allow to express the syntax of a programming language in a more natural (for a programmer) way. Instead of writing $A \to aA | a$ , we can just write $A \to a+$. This choice came with a cost: CPython had to develop a method to support the extended notation.
+We can see [why Guido van Rossum chose to use regular expressions](https://www.blogger.com/profile/12821714508588242516). They allow to express the syntax of a programming language in a more natural (for a programmer) way. Instead of writing $A \to aA | a$ , we can just write $A \to a+$. This choice came with the cost: CPython had to develop a method to support the extended notation.
 
 The parsing of an LL(1) grammar is a solved problem. The solution is a Pushdown Automaton (PDA), which acts as a top-down parser. A PDA operates by simulating the generation of an input string using a stack. To parse some input, it starts with the start symbol on the stack. Then it looks at the first symbol in the input, guesses which rule should be applied to the start symbol and replaces it with the right-hand side of that rule. If a top symbol on the stack is a terminal that matches the next symbol in the input, a PDA pops it and skips the matched symbol. If a top symbol is a nonterminal, a PDA tries to guess the rule to replace it with based on the symbol in the input. The process repeats until the whole input is scanned or if a PDA can't match a terminal on the stack with the next symbol in the input, resulting in an error.
 
-CPython couldn't use this method directly because of how the production rules are written, so the new method had to be developed. To support extended notation, the old parser represents each rule of a grammar with a [Deterministic Finite Automaton](https://en.wikipedia.org/wiki/Deterministic_finite_automaton) (DFA), which is famous for being equivalent to a regular expression. The parser itself is a stack-based automaton like PDA, but instead of pushing symbols on the stack, it pushes states of the DFAs. Here's the key data structures used by the old parser:
+CPython couldn't use this method directly because of how the production rules are written, so the new method had to be developed. To support the extended notation, the old parser represents each rule of the grammar with a [Deterministic Finite Automaton](https://en.wikipedia.org/wiki/Deterministic_finite_automaton) (DFA), which is famous for being equivalent to a regular expression. The parser itself is a stack-based automaton like PDA, but instead of pushing symbols on the stack, it pushes states of the DFAs. Here's the key data structures used by the old parser:
 
 ```C
 typedef struct {
@@ -208,7 +207,7 @@ And the comment from [Parser/parser.c](https://github.com/python/cpython/blob/3.
 > the parser that invoked it continues.  The parse tree constructed by the
 > recursively called parser is inserted as a child in the current parse tree.
 
-The parser builds a parse tree, also known as Concrete Syntax Tree (CST), while parsing an input. In constrast to an AST, a parse tree directly corresponds to the rules applied when deriving an input. All nodes in a parse tree are represented using the same `node` struct:
+The parser builds a parse tree, also known as Concrete Syntax Tree (CST), while parsing an input. In contrast to an AST, a parse tree directly corresponds to the rules applied when deriving an input. All nodes in a parse tree are represented using the same `node` struct:
 
 ```C
 typedef struct _node {
@@ -267,13 +266,13 @@ $ python -m tokenize example2.py
 
 This is how the program looks to the parser. When the parser needs a token, it requests one from the tokenizer. The tokenizer reads one character at a time from the buffer and tries to match the seen prefix with some type of token. How does the tokenizer work with different encodings? It relies on the `io` module. First, the tokenizer detects the encoding. If no encoding is specified, it defaults to UTF-8. Then, the tokenizer opens a file with a C call, which is equivalent to Python's `open(fd, mode='r', encoding=enc)`, and reads its contents by calling the `readline` function. This function returns a unicode string. The characters the tokenizer reads are just bytes in the UTF-8 representation of that string (or EOF).
 
-We could define what a number or a name is directly in the grammar, tough it would become more compex. What we couldn't do is to express the significance of identation in the grammar without making it [context-sensitive](https://en.wikipedia.org/wiki/Context-sensitive_grammar) and, therefore, not suitable for parsing. The tokenizer makes work of the parser much easier by providing `INDENT` and `DEDENT` tokens. They mean what the curly braces mean in a language like C. The tokenizer is powerfull because it has state. The current identation level is kept on the top of the stack. When the level is increased, it's pushed on the stack. If the level is decreased, all higher levels are popped from the stack.
+We could define what a number or a name is directly in the grammar, tough it would become more complex. What we couldn't do is to express the significance of indentation in the grammar without making it [context-sensitive](https://en.wikipedia.org/wiki/Context-sensitive_grammar) and, therefore, not suitable for parsing. The tokenizer makes work of the parser much easier by providing `INDENT` and `DEDENT` tokens. They mean what the curly braces mean in a language like C. The tokenizer is powerful enough to handle indentation because it has state. The current indentation level is kept on the top of the stack. When the level is increased, it's pushed on the stack. If the level is decreased, all higher levels are popped from the stack.
 
-The old parser is a non-trivial piece of the CPython's codebase. The DFAs for the rules of the grammar are generated automatically, but other parts of the parser are written by hand. This is in contrast with the new parser, which seems to be a much more elegant solution to the problem of parsing Python code.
+The old parser is a non-trivial piece of the CPython codebase. The DFAs for the rules of the grammar are generated automatically, but other parts of the parser are written by hand. This is in contrast with the new parser, which seems to be a much more elegant solution to the problem of parsing Python code.
 
 #### new parser
 
-The new parser comes with the new grammar. This grammar is a [Parsing Expression Grammar](https://en.wikipedia.org/wiki/Parsing_expression_grammar) (PEG). The important thing to understand is that PEG is not just the class of grammars. It's another way to define a grammar. PEGs were [introduced by Bryan Ford in 2004](https://pdos.csail.mit.edu/~baford/packrat/popl04/) as a tool to describe a programming language and to generate a parser based on the description. A PEG is different from the traditional formal grammar in that its rules map nonterminals to the parsing expressions instead of just sequences of symbols. This is in the spirit of CPython. A parsing expression is defined inductively. If $e$, $e_1$, and $e_2$ are parsing expressions, then so is:
+The new parser comes with the new grammar. This grammar is a [Parsing Expression Grammar](https://en.wikipedia.org/wiki/Parsing_expression_grammar) (PEG). The important thing to understand is that PEG is not just a class of grammars. It's another way to define a grammar. PEGs were [introduced by Bryan Ford in 2004](https://pdos.csail.mit.edu/~baford/packrat/popl04/) as a tool to describe a programming language and to generate a parser based on the description. A PEG is different from the traditional formal grammar in that its rules map nonterminals to the parsing expressions instead of just sequences of symbols. This is in the spirit of CPython. A parsing expression is defined inductively. If $e$, $e_1$, and $e_2$ are parsing expressions, then so is:
 
 1. the empty string
 2. any terminal
@@ -283,13 +282,13 @@ The new parser comes with the new grammar. This grammar is a [Parsing Expression
 6. $e*$, zero-or-more repetitions
 7. $!e$, a not-predicate.
 
-PEGs are analytic grammars, which means that they are designed not only to generate languages but to analyze them as well. Ford formalized what it means for a parsing expression $e$ to recognize an input $x$. Basically, any attempt to recognize an input with some parsing expression can either succeed or fail and consume some input or not. For example, applying a parsing expression $a$ to an input $ab$ results in a success and consumes $a$.
+PEGs are analytic grammars, which means that they are designed not only to generate languages but to analyze them as well. Ford formalized what it means for a parsing expression $e$ to recognize an input $x$. Basically, any attempt to recognize an input with some parsing expression can either succeed or fail and consume some input or not. For example, applying the parsing expression $a$ to the input $ab$ results in a success and consumes $a$.
 
-This formalization allows to convert any PEG to a [recursive descent parser](https://en.wikipedia.org/wiki/Recursive_descent_parser). A recursive descent parser associates each nonterminal of a grammar with a parsing function. In a case of a PEG, a body of a parsing function is an implementation of the corresponding parsing expression. If a parsing expression contains nonterminals, their parsing functions are called recursively.
+This formalization allows to convert any PEG to a [recursive descent parser](https://en.wikipedia.org/wiki/Recursive_descent_parser). A recursive descent parser associates each nonterminal of a grammar with a parsing function. In the case of a PEG, the body of a parsing function is an implementation of the corresponding parsing expression. If a parsing expression contains nonterminals, their parsing functions are called recursively.
 
 A recursive descent parser has to choose between production rules if some nonterminal has more than one of them. If a grammar is LL(k), a parser can look at the next k tokens in the input and predict the correct rule. Such a parser is called a predictive parser. If it's not possible to predict, the backtracking method is used. A parser with backtracking tries one rule, and, if fails, backtracks and tries another. This is exactly what the prioritized choice operator in a PEG does. So, a PEG parser is a recursive descent parser with backtracking. 
 
-The backtracking method is powerfull but can be computationally costly. Consider a simple example. We apply the expression $AB/A$ to an input that succeeds on $A$ but then fails on $B$. According to the the interpretation of the prioritized choice operator, the parser first tries to recognize $A$ and then $B$. It fails on $B$ and tries to recognize $A$ again. Because of such redundant computations, the parse time can be exponential in the size of the input. To remedy this problem, [Ford suggested](https://bford.info/pub/lang/packrat-icfp02/) to use a memoization technique, i.e. caching the results of function calls. Using this technique, the parser, known as the packrat parser, is guaranteed to work in linear time at the expense of higher memory consumption. And this is what the CPython's new parser does. It's a packrat parser!
+The backtracking method is powerful but can be computationally costly. Consider a simple example. We apply the expression $AB/A$ to the input that succeeds on $A$ but then fails on $B$. According to the the interpretation of the prioritized choice operator, the parser first tries to recognize $A$, succeeds, and then tries to recognize B. It fails on $B$ and tries to recognize $A$ again. Because of such redundant computations, the parse time can be exponential in the size of the input. To remedy this problem, [Ford suggested](https://bford.info/pub/lang/packrat-icfp02/) to use a memoization technique, i.e. caching the results of function calls. Using this technique, the parser, known as the packrat parser, is guaranteed to work in linear time at the expense of a higher memory consumption. And this is what the CPython's new parser does. It's a packrat parser!
 
 No matter how good the new parser is, the reasons to replace the old parser have to be given. This is what the PEPs are for. [PEP 617 -- New PEG parser for CPython](https://www.python.org/dev/peps/pep-0617/) gives a background on both the old and the new parser and explains the reasons behind the transition. In a nutshell, the new parser removes the LL(1) restriction on the grammar and should be easier to maintain. Guido van Rossum wrote [an excellent series on a PEG parsing](https://medium.com/@gvanrossum_83706/peg-parsing-series-de5d41b2ed60), in which he goes into much more detail and shows how to implement a simple PEG parser. We, in our turn, will take a look at its CPython implementation.
 
@@ -309,27 +308,27 @@ while_stmt[stmt_ty]:
 
 Each rule starts with the name of a nonterminal. It's followed by the C type of the result that the parsing function returns. The right-hand side is a parsing expression. The code in the curly braces denotes an action. Actions are simple function calls that return AST nodes or their fields.
 
-The new parser is [Parser/pegen/parse.c](Parser/pegen/parse.c). It's generated automatically by the parser generator. The parser generator is written in Python. It's a program that takes a grammar and generates a PEG parser in C or Python. A grammar is represented by the instance of the Grammar class. But to build a Grammar object, there must be a parser for the grammar file. [This parser](https://github.com/python/cpython/blob/3.9/Tools/peg_generator/pegen/grammar_parser.py) is also generated automatically by the parser generator from the [metagrammar](https://github.com/python/cpython/blob/3.9/Tools/peg_generator/pegen/metagrammar.gram). That's why the parser generator can generate a parser in Python. But what parses the metagrammar? Well, it's in the same notation as grammar, so the generated grammar parser is able to parse the metagrammar as well. Of couse, the grammar parser had to be bootstrapped, i.e. the first version had to be written by hand. Once that's done, all parsers can be generated automatically.
+The new parser is [Parser/pegen/parse.c](Parser/pegen/parse.c). It's generated automatically by the parser generator. The parser generator is written in Python. It's a program that takes a grammar and generates a PEG parser in C or Python. A grammar is represented by the instance of the Grammar class. But to build a Grammar object, there must be a parser for the grammar file. [This parser](https://github.com/python/cpython/blob/3.9/Tools/peg_generator/pegen/grammar_parser.py) is also generated automatically by the parser generator from the [metagrammar](https://github.com/python/cpython/blob/3.9/Tools/peg_generator/pegen/metagrammar.gram). That's why the parser generator can generate a parser in Python. But what parses the metagrammar? Well, it's in the same notation as grammar, so the generated grammar parser is able to parse the metagrammar as well. Of course, the grammar parser had to be bootstrapped, i.e. the first version had to be written by hand. Once that's done, all parsers can be generated automatically.
 
-Like the old parser, the new parser gets tokens from the tokenizer. This is unusual for a PEG parser since it allows to unify tokenization and parsing. But we saw that the tokenizer does a non-trivial job, so CPython developers decided to make use of it.
+Like the old parser, the new parser gets tokens from the tokenizer. This is unusual for a PEG parser since it allows to unify tokenization and parsing. But we saw that the tokenizer does a non-trivial job, so the CPython developers decided to make use of it.
 
 On this note, we end our discussion of parsing to see what happens next to an AST.
 
 ### AST optimization
 
-The diagram of the CPython compiler's architecture shows us the AST optimizer alongside the parser and the compiler. This probably overemphasizes the optimizer's role. The AST optimizer is confined to constant folding and was introduced only in CPython 3.7. Before CPython 3.7, constant folding was done at the later stage in the peephole optimizer. Nonetheless, due to the AST optimizer we can write things like this:
+The diagram of the CPython compiler's architecture shows us the AST optimizer alongside the parser and the compiler. This probably overemphasizes the optimizer's role. The AST optimizer is confined to constant folding and was introduced only in CPython 3.7. Before CPython 3.7, constant folding was done at the later stage by the peephole optimizer. Nonetheless, due to the AST optimizer we can write things like this:
 
 ```python
 n = 2 ** 32 # easier to write and to read
 ```
 
-and expect it to be calculated at compile time. An example of the less obvious optimization is a conversion of a list of constants and a set of constants into a tuple and a frozenset respectively.
+and expect it to be calculated at compile time. An example of the less obvious optimization is the conversion of a list of constants and a set of constants into a tuple and a frozenset respectively.
 
 ### From AST to code object
 
-Up until now, we've been studying how CPython creates an AST from a source code, but as we've seen in the first post, the CPython VM knows nothing about AST and is only able to execute a code object. The conversion of an AST to a code object is a job of the compiler. More specifically, the compiler must return the module's code object containing module's bytecode along with code objects for other code blocks in a module such as defined functions and classes.
+Up until now, we've been studying how CPython creates an AST from a source code, but as we've seen in the first post, the CPython VM knows nothing about the AST and is only able to execute a code object. The conversion of an AST to a code object is a job of the compiler. More specifically, the compiler must return the module's code object containing module's bytecode along with the code objects for other code blocks in a module such as defined functions and classes.
 
-Sometimes the best way to understand a solution to a problem is to think of one's own. Let's ponder what we would do if we were the compiler. We start with the root node of an AST that represents a module. Children of this node are statements. Let's assume that the first statement is a simple assignment like `x = 1`. It's represented by the `Assign` AST node: `Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))`. To convert this node to a code object we need to create one, store constant `1` in the list of contstants of the code object, store the name of the variable `x` in the list of names used in the code object and emit instructions `LOAD_CONST` and `STORE_NAME`. We could write a function to do that. But even a simple assignment can be tricky. For example, imagine that the same assignment is made inside the body of a function. If `x` is a local variable, we should emit `STORE_FAST` instruction. If `x` is a global variable, we should emit `STORE_GLOBAL` instruction. Finally, if `x` is referenced by the nested function, we should emit `STORE_DEREF` instruction. The problem is to determine what type of variable `x` is. CPython solves this problem by building a symbol table before compiling.
+Sometimes the best way to understand a solution to a problem is to think of one's own. Let's ponder what we would do if we were the compiler. We start with the root node of an AST that represents a module. Children of this node are statements. Let's assume that the first statement is a simple assignment like `x = 1`. It's represented by the `Assign` AST node: `Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))`. To convert this node to a code object we need to create one, store constant `1` in the list of constants of the code object, store the name of the variable `x` in the list of names used in the code object and emit instructions `LOAD_CONST` and `STORE_NAME`. We could write a function to do that. But even a simple assignment can be tricky. For example, imagine that the same assignment is made inside the body of a function. If `x` is a local variable, we should emit `STORE_FAST` instruction. If `x` is a global variable, we should emit `STORE_GLOBAL` instruction. Finally, if `x` is referenced by the nested function, we should emit `STORE_DEREF` instruction. The problem is to determine what type of variable `x` is. CPython solves this problem by building a symbol table before compiling.
 
 #### symbol table
 
@@ -402,7 +401,7 @@ def func(x):
 (False, True)
 ```
 
-This example shows that every code block has a corresponding symbol table entry. We've accidentally come across the strange `.0` symbol inside the namespace of the list comprehension. This namespace doesn't contain the `range` symbol, which is also strange. This is because a list comprehension is implemented as an anonymous function and `range(10)` is passed to it as an argument. This argument is reffered to as `.0`. What else does CPython hide from us?
+This example shows that every code block has a corresponding symbol table entry. We've accidentally come across the strange `.0` symbol inside the namespace of the list comprehension. This namespace doesn't contain the `range` symbol, which is also strange. This is because a list comprehension is implemented as an anonymous function and `range(10)` is passed to it as an argument. This argument is referred to as `.0`. What else does CPython hide from us?
 
 The symbol table entries are constructed in two passes. During the first pass, CPython walks the AST and creates a symbol table entry for each code block it encounters. It also collects information that can be collected on the spot, such as wether a symbol is defined or used in the block. But some information is hard to deduce during the first pass. Consider the example:
 
@@ -548,7 +547,25 @@ struct instr {
 
 We can see that the basic blocks are connected not only by jump instructions but also through the `b_list` and `b_next` fields. The compiler uses `b_list` to access all allocated blocks, for example, to free the memory. `b_next` is of more interest to us right now. As the comment says, it points to the next block reached by the normal control flow, which means that it can be used to assemble blocks in the right order. Returning to our example once more, the `test` block points to the `body` block, the `body` block points to the `orelse` block and the `orelse` block points to the block after the if statement. Because basic blocks point to each other, they form a graph called [Control Flow Graph](https://en.wikipedia.org/wiki/Control-flow_graph) (CFG).
 
-We've identified two important problems and we've seen how the compiler solves them. Now, let's put everything together to see how the compiler works from the beginning to the end.
+#### frame blocks
+
+There is one more problem to solve: how to understand where to jump to when compiling statements like `continue` and `break`? The compiler solves this problem by introducing yet another type of block called frame block. There are different kinds of frame blocks. The `WHILE_LOOP` frame block, for example, points to two basic blocks: the `body` block and the block after the while statement. These basic blocks are used when compiling the `continue` and `break` statements respectively. Since frame blocks can nest, the compiler keeps track of them using stacks, one stack of frame blocks per code block. Frame blocks are also useful when dealing with statements such as `try-except-finally `, but we will not dwell on this now. Let's instead have a look at the definition of the `fblockinfo` struct:
+
+```C
+enum fblocktype { WHILE_LOOP, FOR_LOOP, EXCEPT, FINALLY_TRY, FINALLY_END,
+                  WITH, ASYNC_WITH, HANDLER_CLEANUP, POP_VALUE };
+
+struct fblockinfo {
+    enum fblocktype fb_type;
+    basicblock *fb_block;
+    /* (optional) type-specific exit or cleanup block */
+    basicblock *fb_exit;
+    /* (optional) additional information required for unwinding */
+    void *fb_datum;
+};
+```
+
+We've identified three important problems and we've seen how the compiler solves them. Now, let's put everything together to see how the compiler works from the beginning to the end.
 
 #### compiler units, compiler and assembler
 
