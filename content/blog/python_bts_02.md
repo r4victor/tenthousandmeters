@@ -17,7 +17,7 @@ We understood what the responsibilities of the CPython compiler are, but before 
 
 A compiler, in its general sense, is a program that translates a program in one language into an equivalent program in another language. There are many types of compilers, but most of the times by a compiler we mean a static compiler, which translates a program in a high-level language to a machine code. Does the CPython compiler have something in common with this type of a compiler? To answer this question, let's take a look at the traditional three-stage design of a static compiler.
 
-<img src="{static}/blog/python_bts_02/diagram1.png" alt="diagram1" style="zoom:50%; display: block; margin: 0 auto;" />
+<img src="{static}/blog/python_bts_02/diagram1.png" alt="diagram1" style="width:201px; display: block; margin: 0 auto;" />
 
 The frontend of a compiler transforms a source code into some intermediate representation (IR). The optimizer then takes an IR, optimizes it and passes an optimized IR to the backend that generates machine code. If we choose an IR that is not specific to any source language and any target machine, then we get a key benefit of the three-stage design: for a compiler to support a new source language only an additional frontend is needed and to support a new target machine only an additional backend is needed.
 
@@ -25,11 +25,11 @@ The LLVM toolchain is a great example of a success of this model. There are fron
 
 CPython, however, doesn't need to support multiple source languages and target machines but only a Python code and the CPython VM. Nevertheless, CPython compiler is an implementation of the three-stage design. To see why, we should examine the stages of a three-stage compiler in more detail. 
 
-<img src="{static}/blog/python_bts_02/diagram2.png" alt="diagram1" style="zoom:50%; display: block; margin: 0 auto;" />
+<img src="{static}/blog/python_bts_02/diagram2.png" alt="diagram1" style="width:522px; display: block; margin: 0 auto;" />
 
 The picture above represents a model of a classic compiler. Now compare it to the architecture of the CPython compiler in the picture below.
 
-<img src="{static}/blog/python_bts_02/diagram3.png" alt="diagram1" style="zoom:50%; display: block; margin: 0 auto;" />
+<img src="{static}/blog/python_bts_02/diagram3.png" alt="diagram1" style="width:521px; display: block; margin: 0 auto;" />
 
 Looks similar, isn't it? The point here is that the structure of the CPython compiler should be familiar to anyone who studied compilers before. If you didn't, a famous [Dragon Book](https://en.wikipedia.org/wiki/Compilers:_Principles,_Techniques,_and_Tools) is an excellent introduction to the theory of compiler construction. It's long, but you'll benefit even by reading only the first few chapters.
 
