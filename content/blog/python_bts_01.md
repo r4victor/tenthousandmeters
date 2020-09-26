@@ -62,7 +62,7 @@ def g(x):
     return x + 3
 ```
 
-CPython translates the body of the function `g` to the following sequence of bytes: `[124, 0, 100, 1, 23, 0, 83, 0]`. If we run a standard `dis` module to disassemble it, here's what we'll get:
+CPython translates the body of the function `g` to the following sequence of bytes: `[124, 0, 100, 1, 23, 0, 83, 0]`. If we run a standard [`dis`](https://docs.python.org/3/library/dis.html) module to disassemble it, here's what we'll get:
 
 ```python
 2           0 LOAD_FAST            0 (x)
@@ -299,7 +299,7 @@ In this part we've outlined what `python` does to execute a Python program. We'v
 
 The part of the interpreter that is responsible for bytecode execution is called a virtual machine. The CPython VM has several particularly important concepts: a code object, a frame object, a thread state, an interpreter state and the runtime. These data structures form a core of the CPython architecture. 
 
-We haven't covered a lot of things. We avoided digging into the source code. The initialization and compilation stages were completly out of our scope. Instead, we started with the broad overview of the VM. In this way, I think, we can better see the responsibilities of each stage. Now we know what CPython compiles source code to – to the code object. Next time we'll see how it does that.
+We haven't covered a lot of things. We avoided digging into the source code. The initialization and compilation stages were completly out of our scope. Instead, we started with the broad overview of the VM. In this way, I think, we can better see the responsibilities of each stage. Now we know what CPython compiles source code to – to the code object. [Next time]({filename}/blog/python_bts_02.md) we'll see how it does that.
 
 <br>
 
