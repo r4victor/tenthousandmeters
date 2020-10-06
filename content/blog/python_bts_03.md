@@ -6,7 +6,7 @@ In the first and the second parts of this series we've explored the ideas behind
 
 ### Plan for today
 
-The CPython codebase is around 350,000 lines of C code (excluding header files) and almost 600,000 lines of Python code. Undoubtedly, it would be a daunting task to comprehend all of that at once. So, today we'll confine our study to that part of the source code that executes on every run. We'll start with the `main` function of the `python` executable and step through the source code until we reach the evaluation loop, a place where the Python bytecode gets executed.
+The CPython codebase is around 350,000 lines of C code (excluding header files) and almost 600,000 lines of Python code. Undoubtedly, it would be a daunting task to comprehend all of that at once. So, today we'll confine our study to that part of the source code that executes on every run. We'll start with the `main()` function of the `python` executable and step through the source code until we reach the evaluation loop, a place where the Python bytecode gets executed.
 
 Our goal is not to understand every piece of code we'll encounter but to highlight the most interesting parts, study them, and, eventually, get an approximate idea of what happens at the very start of the execution of a Python program.
 
@@ -48,13 +48,13 @@ Some of the listed subdirectories are of particular importance to us in the cour
 * `Include/` contains header files. These header files are used both by CPython and by the users of the [Python/C API](Python/C API).
 * `Lib/` contains standard library modules written in Python. While some modules, such as ` argparse` and `wave`, are written in Python entirely, many wrap C code. For example, the Python `io` module  wraps the C `_io` module .
 * `Modules/` contains standard library modules written in C. While some modules, such as `itertools`, are intended to be imported directly, others are wrapped by the Python modules.
-* `Objects/` contains the implementations of the built-in types. If you want to understand how `string` or `list` are implemented, this is the ultimate place to go to.
+* `Objects/` contains the implementations of the built-in types. If you want to understand how `int` or `list` are implemented, this is the ultimate place to go to.
 * `Parser/` contains the old parser, the old parser generator, the new parser and the tokenizer.
-* `Programs/` contains source files that are compiled as executables. 
-* `Python/` contains source files for the interpreter itself. This includes the compiler, the evaluation loop, the `builtin` module and many other interesting things.
+* `Programs/` contains source files that are compiled to executables. 
+* `Python/` contains source files for the interpreter itself. This includes the compiler, the evaluation loop, the `builtins` module and many other interesting things.
 * `Tools/` contains tools useful for building and managing CPython. For example, the new parser generator lives here.
 
-If you don't see a directory for tests, and your heart starts beating faster, relax. It's `Lib/test/`. Tests are useful not only for CPython development but also for getting an understanding of how CPython works. For example, to understand what kinds of optimization the peephole optimizer must do, you can go to `Lib/test/test_peepholer.py` and look. And to understand what some piece of code of the peephole optimizer does, you can delete it, recompile CPython, run 
+If you don't see a directory for tests, and your heart starts beating faster, relax. It's `Lib/test/`. Tests are useful not only for CPython development but also for getting an understanding of how CPython works. For example, to understand what kinds of optimization the peephole optimizer is expected to do, you can go to `Lib/test/test_peepholer.py` and look. And to understand what some piece of code of the peephole optimizer does, you can delete it, recompile CPython, run 
 
 ```text
 $ ./python.exe -m test test_peepholer
@@ -87,7 +87,7 @@ Type "help", "copyright", "credits" or "license" for more information.
 
 ### Source code
 
-The execution of CPython, like execution of any other C program, starts with the `main` function in `Python/python.c`:
+The execution of CPython, like execution of any other C program, starts with the `main()` function in `Python/python.c`:
 
 ```C
 /* Minimal main program -- everything is loaded from the library */
@@ -109,9 +109,9 @@ main(int argc, char **argv)
 #endif
 ```
 
-There isn't much going on there. The only thing worth mentioning is that on Windows CPython uses [`wmain`](https://docs.microsoft.com/en-us/cpp/c-language/using-wmain?view=vs-2019) instead of `main` as an entrypoint to receive `argv` as `UTF-16` encoded strings. The affect of this is that on other platforms CPython performs an additional step of converting a `char` string to a `wchar_t` string. The input encoding depends on the locale settings, and the output encoding depends on the size of `w_char`. For example, if `sizeof(wchar_t) == 4`, the `UCS-4` encoding is used.
+There isn't much going on there. The only thing worth mentioning is that on Windows CPython uses [`wmain()`](https://docs.microsoft.com/en-us/cpp/c-language/using-wmain?view=vs-2019) instead of `main()` as an entrypoint to receive `argv` as `UTF-16` encoded strings. The affect of this is that on other platforms CPython performs an extra step of converting a `char` string to a `wchar_t` string. The encoding of a `char` string depends on the locale settings, and the encoding of a `wchar_t` string depends on the size of `wchar_t`. For example, if `sizeof(wchar_t) == 4`, the `UCS-4` encoding is used. [PEP 383](https://www.python.org/dev/peps/pep-0383/) has more to say on this.
 
-We find `Py_Main` and `Py_BytesMain` in `Modules/main.c`. What they do is essentially call `pymain_main` with slightly different arguments:
+We find `Py_Main()` and `Py_BytesMain()` in `Modules/main.c`. What they do is essentially call `pymain_main()` with slightly different arguments:
 
 ```C
 int
@@ -138,13 +138,16 @@ Py_BytesMain(int argc, char **argv)
 }
 ```
 
-We should stop on `pymain_main` for a little bit longer, though, at the first sight, it doesn't seem to do much either:
+We should stop on `pymain_main()` for a little bit longer, though, at the first sight, it doesn't seem to do much either:
 
 ```C
 static int
 pymain_main(_PyArgv *args)
 {
     PyStatus status = pymain_init(args);
+  	// CPython's straightforward way of checking for errors.
+  	// Often goto is used to do clean-up.
+  	// I'll omit most of such blocks further.
     if (_PyStatus_IS_EXIT(status)) {
         pymain_free();
         return status.exitcode;
@@ -157,24 +160,24 @@ pymain_main(_PyArgv *args)
 }
 ```
 
-Last time we learned that before a Python program starts executing, CPython does a lot of things to compile it. It turns out that CPython does a lot of things even before it starts compiling a program. Those things constitute the initialization of CPython. We've already mentioned in the first part that CPython works in three stages:
+Last time we learned that before a Python program starts executing, CPython does a lot of things to compile it. It turns out that CPython does a lot of things even before it starts compiling a program. These things constitute the initialization of CPython. We've already said in the first part that CPython works in three stages:
 
 1. initialization
 2. compilation; and
 3. interpretation.
 
-So, what `pymain_main` does is call `pymain_init(args)` to perform the initialization and then call `Py_RunMain()` to proceed with the next stages. The question remains: what does CPython do during the initialization? It's not that hard to answer. At the very least CPython has to:
+So, what `pymain_main()` does is call `pymain_init()` to perform the initialization and then call `Py_RunMain()` to proceed with the next stages. The question remains: what does CPython do during the initialization? Let's think about it. At the very least CPython has to:
 
 * find a common language with the OS to handle properly the encodings of arguments, environment variables, standard streams and the file system
 * parse the command line arguments and read the environment variables to determine the options to run with
-* configure the standard streams
+* configure the standard streams??
 * initialize the runtime state, the main interpreter state and the main thread state
 * initialize built-in types and the `builtins` module
 * initialize the `sys` module
 * set up the import system
 * create the `__main__` module.
 
-Before we step into `pymain_init` to see how all of that is done, let's discuss the initialization process in more detail.
+Before we step into `pymain_init()` to see how all of that is done, let's discuss the initialization process in more detail.
 
 #### initialization
 
@@ -188,7 +191,7 @@ The phases gradually intoduce new capabilities. The preinitialization phase init
 
 What's the benefit of having distinct initialization phases? In a nutshell, it allows to tune CPython more easily. For example, one may set a custom memory allocator in the `preinitialized` state or override the path configuration in the `core_initialized` state. Of course, CPython itself doesn't need to tune anything. Such capabilities are important to the users of the Python/C API who extend and embed Python. [PEP 432](https://www.python.org/dev/peps/pep-0432/) and [PEP 587](https://www.python.org/dev/peps/pep-0587/) explain in greater detail why having multi-phase initialization is a good idea.
 
-The `pymain_init` function mostly deals with the preinitialization and calls `Py_InitializeFromConfig(&config)` in the end to perform the core and the main phases of the initialization:
+The `pymain_init()` function mostly deals with the preinitialization and calls `Py_InitializeFromConfig()` in the end to perform the core and the main phases of the initialization:
 
 ```C
 static PyStatus
@@ -196,19 +199,25 @@ pymain_init(const _PyArgv *args)
 {
     PyStatus status;
 
+  	// Initialize the runtime state
     status = _PyRuntime_Initialize();
   	// ... handle errors
 
+  	// Initialize preconfig to the defaults
     PyPreConfig preconfig;
     PyPreConfig_InitPythonConfig(&preconfig);
 
+  	// Perfrom preinitialization
     status = _Py_PreInitializeFromPyArgv(&preconfig, args);
   	// ... 
+  	// Preinitialized. Prepare config for the next initialization phases
 
+  	// Initialize config to the defaults
     PyConfig config;
     PyConfig_InitPythonConfig(&config);
 
-    // read config from command line arguments, environment variables, configuration files
+    // Read configuration from command line arguments, environment variables,
+  	// configuration files and store in config
     if (args->use_bytes_argv) {
         status = PyConfig_SetBytesArgv(&config, args->argc, args->bytes_argv);
     }
@@ -217,7 +226,7 @@ pymain_init(const _PyArgv *args)
     }
     // ... 
 
-  	// preinitialized, perform core and main initialization
+  	// Perform core and main initialization
     status = Py_InitializeFromConfig(&config);
 	// ... 
 
@@ -225,7 +234,7 @@ pymain_init(const _PyArgv *args)
 }
 ```
 
-`_PyRuntime_Initialize` initializes the runtime state. The runtime state is stored in the global variable called `_PyRuntime` of type `_PyRuntimeState`, which is defined as follows:
+`_PyRuntime_Initialize()` initializes the runtime state. The runtime state is stored in the global variable called `_PyRuntime` of type `_PyRuntimeState`, which is defined as follows:
 
 ```C
 /* Full Python runtime state */
@@ -348,11 +357,11 @@ typedef struct {
 } PyPreConfig;
 ```
 
-After the call to `_PyRuntime_Initialize`, the `_PyRuntime` global variable is initialized to the defaults. Next, `pymain_init` initializes `preconfig`  by calling `PyPreConfig_InitPythonConfig(&preconfig)`  and then calls `_Py_PreInitializeFromPyArgv(&preconfig, args)` to perfrom the actual preinitialization. What's the reason to initialize another `preconfig` if there is already one in `_PyRuntime`? Remember that many functions that CPython calls are also exposed via the Python/C API. So, CPython just uses this API in the way it's designed to be used. Another consequence of this is that, when stepping thought the CPython source code, as we do today, you often encounter a function that seems to do more than you expect it to do. For example, `_PyRuntime_Initialize` is called several times during the initialization process. Of course, it does nothing on the subsequent calls.
+After the call to `_PyRuntime_Initialize()`, the `_PyRuntime` global variable is initialized to the defaults. Next, `PyPreConfig_InitPythonConfig()` initializes `preconfig` and then `_Py_PreInitializeFromPyArgv()` performs the actual preinitialization. What's the reason to initialize another `preconfig` if there is already one in `_PyRuntime`? Remember that many functions that CPython calls are also exposed via the Python/C API. So, CPython just uses this API in the way it's designed to be used. Another consequence of this is that, when stepping thought the CPython source code, as we do today, you often encounter a function that seems to do more than you expect it to do. For example, `_PyRuntime_Initialize()` is called several times during the initialization process. Of course, it does nothing on the subsequent calls.
 
-`_Py_PreInitializeFromPyArgv` reads the command line arguments, the enviroment variables and the global configuration variables to set  `_PyRuntime.preconfig`, the current locale and the memory allocator. It doesn't read all the configuration, but only those parameters that are relevant to the preinitialization phase. For example, it parses only the `-E -I -X` arguments. 
+`_Py_PreInitializeFromPyArgv()` reads the command line arguments, the enviroment variables and the global configuration variables to set  `_PyRuntime.preconfig`, the current locale and the memory allocator. It doesn't read all the configuration, but only those parameters that are relevant to the preinitialization phase. For example, it parses only the `-E -I -X` arguments. 
 
-At this point, the runtime is preinitialized. The rest `pymain_init` does is prepares `config` for the next initialization phase. You should not confuse `config` with `preconfig`. `config` is a structure that holds most of the Python configuration. It's heavily used during the initialization phase and then also during the execution of a Python program. To understand how, I recommend you to look over its definition, even despite its length:
+At this point, the runtime is preinitialized. The rest `pymain_init()` does is prepares `config` for the next initialization phase. You should not confuse `config` with `preconfig`. `config` is a structure that holds most of the Python configuration. It's heavily used during the initialization phase and then also during the execution of a Python program. To get an idea of what `config` is used for, I recommend you to look over its definition:
 
 ```C
 /* --- PyConfig ---------------------------------------------- */
@@ -652,29 +661,39 @@ typedef struct {
 } PyConfig;
 ```
 
-`pymain_init` initializes `config` to the defaults by calling `PyConfig_InitPythonConfig(&config)`, stores the command line arguments in `config.argv` by calling `PyConfig_SetBytesArgv(&config, args->argc, args->bytes_argv)` and, eventually, calls `Py_InitializeFromConfig(&config)` to perform the core and the main initialization phases. Here's slightly simplified `Py_InitializeFromConfig`:
+The same way as `pymain_init()` called `PyPreConfig_InitPythonConfig()` to create default `preconfig`, it now calls `PyConfig_InitPythonConfig()` to create default `config`. It then calls `PyConfig_SetBytesArgv()` to store the command line arguments in `config.argv` and `Py_InitializeFromConfig()` to perform the core and the main initialization phases. We move further from `pymain_init()` to `Py_InitializeFromConfig()`:
 
 ```C
 PyStatus
 Py_InitializeFromConfig(const PyConfig *config)
 {
-    // ... handle errors
+    if (config == NULL) {
+        return _PyStatus_ERR("initialization config is NULL");
+    }
   
     PyStatus status;
 
-  	// yeah, call once again
+  	// Yeah, call once again
     status = _PyRuntime_Initialize();
-    // ...
+    if (_PyStatus_EXCEPTION(status)) {
+        return status;
+    }
     _PyRuntimeState *runtime = &_PyRuntime;
 
     PyThreadState *tstate = NULL;
+  	// The core initialization phase
     status = pyinit_core(runtime, config, &tstate);
-    // ...
+    if (_PyStatus_EXCEPTION(status)) {
+        return status;
+    }
     config = _PyInterpreterState_GetConfig(tstate->interp);
 
     if (config->_init_main) {
+      	// The main initialization phase
         status = pyinit_main(tstate);
-        // ...
+        if (_PyStatus_EXCEPTION(status)) {
+            return status;
+        }
     }
 
     return _PyStatus_OK();
@@ -682,12 +701,12 @@ Py_InitializeFromConfig(const PyConfig *config)
 
 ```
 
-Here we can clearly see the separation between the initialization phases. The core phase is done by `pyinit_core`, and the main phase is done by `pyinit_main`. The `pyinit_core` function initializes the "core" of Python. More specifically,
+We can clearly see the separation between the initialization phases. The core phase is done by `pyinit_core()`, and the main phase is done by `pyinit_main()`. The `pyinit_core()` function initializes the "core" of Python. More specifically,
 
-1. It prepares the configuration: parses the command line arguments, reads the environment variables, calculates `config.module_search_paths `, chooses the encodings for the standard streams and the file system and writes all of this to the appropriate place in `config`.
-2. It applies the configuration: initializes the standard streams, generates the secret key for hashing, creates the main interpreter state and the main thread state, initializes the GIL and takes it, enables the GC, initializes built-in types and exceptions, initializes the `sys` module and the `builtins` module and sets up the import mechanism for built-in and frozen modules.
+1. It prepares the configuration: parses the command line arguments, reads the environment variables, calculates the path configuration, chooses the encodings for the standard streams and the file system and writes all of this to the appropriate place in `config`.
+2. It applies the configuration: configures the standard streams, generates the secret key for hashing, creates the main interpreter state and the main thread state, initializes the GIL and takes it, enables the GC, initializes built-in types and exceptions, initializes the `sys` module and the `builtins` module and sets up the import system for built-in and frozen modules.
 
-The first step is not very interesting, so let's look at the `pyinit_config` function, which performs the second step:
+During the first step, CPython calculates `config.module_search_paths `, which will be later copied to `sys.path`. Otherwise, this step is not very interesting, so let's look at  `pyinit_config()` , which `pyinit_core()` calls to perform the second step:
 
 ```C
 static PyStatus
@@ -695,19 +714,20 @@ pyinit_config(_PyRuntimeState *runtime,
               PyThreadState **tstate_p,
               const PyConfig *config)
 {
-  	// initialize C standard streams (stdin, stdout, stderr)
-  	// set secret key for hashing
+  	// Set Py_* global variables from config
+  	// Initialize C standard streams (stdin, stdout, stderr).
+  	// Set secret key for hashing
     PyStatus status = pycore_init_runtime(runtime, config);
     // ... handle errors
 
     PyThreadState *tstate;
-  	// create the main interpreter state and the main thread state
-    // take GIL
+  	// Create the main interpreter state and the main thread state.
+    // Take the GIL
     status = pycore_create_interpreter(runtime, config, &tstate);
     // ...
     *tstate_p = tstate;
 
-    // types, exception, sys, builtins, import, etc.
+    // Types, exception, sys, builtins, import, etc.
     status = pycore_interp_init(tstate);
     // ...
 
@@ -717,19 +737,23 @@ pyinit_config(_PyRuntimeState *runtime,
 }
 ```
 
-CPython uses [SipHash24](https://en.wikipedia.org/wiki/SipHash) hash function to compute hashes. It takes an input along with the secret key, which is stored in the `_Py_HashSecret` global variable.  `pycore_init_runtime` calls `_Py_HashRandomization_Init` to randomly generate the key. The purpose of randomization is to protect a Python application from hash collision DoS attacks. Python and many other languages including PHP, Ruby, JavaScript and C# were once vulnerable to such attacks. An attacker could send a set of strings with the same hash to an application and increase dramatically the CPU time required to put these strings in the dictionary because they all happen to be in the same bucket. The solution is to supply a hash function with the randomly generated key uknown to the attacker. Python also allows to generate a key deterministically by setting the `PYTHONHASHSEED` environment variable to some fixed value. To learn more about the attack, check [this presentation](https://fahrplan.events.ccc.de/congress/2011/Fahrplan/attachments/2007_28C3_Effective_DoS_on_web_application_platforms.pdf). To learn more about the CPython's hash algorithm, check [PEP 456](https://www.python.org/dev/peps/pep-0456/).
+First, `pycore_init_runtime()` copies some of the `config`'s fields to the corresponding [global configuration variables](https://docs.python.org/3/c-api/init.html#global-configuration-variables). These global variables were used to configure CPython before `PyConfig` was introduced and continue to be a part of the Python/C API.
 
-In the first part we learned that CPython uses a thread state to store thread-specific data, such as a call stack and an exception state, and an interpreter state to store interpreter-specific data, such as loaded modules and import settings.  The `pycore_create_interpreter`  function creates an interpreter state and a thread state for the main thread that is currently executing. An interpreter state is represented by the following struct:
+Next, `pycore_init_runtime()` sets the buffering modes for the `stdio`, `stdout` and `stderr` [file pointers](http://www.cplusplus.com/reference/cstdio/FILE/). On Unix-like systems this is done by calling the [`setvbuf()`](https://linux.die.net/man/3/setvbuf) library function.
+
+Finally, `pycore_init_runtime()` generates the secret key for hashing, which is stored in the `_Py_HashSecret` global variable. The secret key is taken along with the input by the [SipHash24](https://en.wikipedia.org/wiki/SipHash) hash function, which CPython uses to compute hashes. The secret key is randomly generated each time CPython starts. The purpose of randomization is to protect a Python application from hash collision DoS attacks. Python and many other languages including PHP, Ruby, JavaScript and C# were once vulnerable to such attacks. An attacker could send a set of strings with the same hash to an application and increase dramatically the CPU time required to put these strings in the dictionary because they all happen to be in the same bucket. The solution is to supply a hash function with the randomly generated key uknown to the attacker. Python also allows to generate a key deterministically by setting the `PYTHONHASHSEED` environment variable to some fixed value. To learn more about the attack, check [this presentation](https://fahrplan.events.ccc.de/congress/2011/Fahrplan/attachments/2007_28C3_Effective_DoS_on_web_application_platforms.pdf). To learn more about the CPython's hash algorithm, check [PEP 456](https://www.python.org/dev/peps/pep-0456/).
+
+In the first part we learned that CPython uses a thread state to store thread-specific data, such as a call stack and an exception state, and an interpreter state to store interpreter-specific data, such as loaded modules and import settings.  The `pycore_create_interpreter()`  function creates an interpreter state and a thread state for the main OS thread. We haven't seen yet what these structures look like, so here's the definition of the interpreter state struct:
 
 ```C
 // The PyInterpreterState typedef is in Include/pystate.h.
 struct _is {
 		
   	// _PyRuntime.interpreters.head stores the most recently created interpreter
-  	// next allows to access all interpreters
+  	// `next` allows to access all interpreters
     struct _is *next;
-  	// holds the most recently created thread state
-  	// thread states of the same interpreter are linked together
+  	// `tstate_head` points to the most recently created thread state.
+  	// Thread states of the same interpreter are linked together
     struct _ts *tstate_head;
 
     /* Reference to the _PyRuntime global variable. This field exists
@@ -738,7 +762,7 @@ struct _is {
     struct pyruntimestate *runtime;
 
     int64_t id;
-  	// track references to the interpreter
+  	// Track references to the interpreter
     int64_t id_refcount;
     int requires_idref;
     PyThread_type_lock id_mutex;
@@ -754,7 +778,7 @@ struct _is {
     PyObject *builtins; // builtins.__dict__
     PyObject *importlib;
 		
-  	// a list of codec search functions
+  	// A list of codec search functions
     PyObject *codec_search_path;
     PyObject *codec_search_cache;
     PyObject *codec_error_registry;
@@ -771,21 +795,21 @@ struct _is {
     /* Initialized to PyEval_EvalFrameDefault(). */
     _PyFrameEvalFunction eval_frame;
 
-    // see `atexit` module
+    // See `atexit` module
     void (*pyexitfunc)(PyObject *);
     PyObject *pyexitmodule;
 
     uint64_t tstate_next_unique_id;
 
-  	// see `warnings` module
+  	// See `warnings` module
     struct _warnings_runtime_state warnings;
 
-  	// a list of audit hooks, see sys.addaudithook
+  	// A list of audit hooks, see sys.addaudithook
     PyObject *audit_hooks;
   
 #if _PY_NSMALLNEGINTS + _PY_NSMALLPOSINTS > 0
-    // small integers are preallocated in this array so that they can be shared
-  	// the default range is [-5, 256]
+    // Small integers are preallocated in this array so that they can be shared.
+  	// The default range is [-5, 256]
     PyLongObject* small_ints[_PY_NSMALLNEGINTS + _PY_NSMALLPOSINTS];
 #endif
   
@@ -793,20 +817,19 @@ struct _is {
 };
 ```
 
-The important thing to note here is that `config` belongs to the interpreter state. The configuration that was read before is stored in `config` of the newly created interpreted state. Then, `pycore_create_interpreter` creates the first thread state, which is defined as follows:
+The important thing to note here is that `config` belongs to the interpreter state. The configuration that was read before is stored in `config` of the newly created interpreted state. The thread state struct is defined as follows:
 
 ```C
 // The PyThreadState typedef is in Include/pystate.h.
 struct _ts {
   
-  	// double-linked list is used to access all thread states
-  	// belonging to the same interpreter
+  	// Double-linked list is used to access all thread states belonging to the same interpreter
     struct _ts *prev;
     struct _ts *next;
     PyInterpreterState *interp;
 
-    // reference to the current frame (it can be NULL)
-  	// the call stack is accesible via frame->f_back
+    // Reference to the current frame (it can be NULL).
+  	// The call stack is accesible via frame->f_back
     PyFrameObject *frame;
   
   	// ... checking if recursion level is too deep
@@ -840,4 +863,256 @@ struct _ts {
     // ... less interesting stuff for now
 };
 ```
+
+After creating a thread state for the main OS thread, `pycore_create_interpreter()` initializes the GIL, which prevents multiple threads from working with Python objects at the same time. If you spawn a new thread using the `threading` module, it  starts executing a given target in the evaluation loop. In this case, threads wait for the GIL and take it at the start of each iteration of the evaluation loop. A thread can access its thread state because it's provided as an argument to the evaluation function. If you, hovewer, write a C extension and call the Python/C API to take the GIL, CPython needs not only to take the GIL but also to associate the current thread with the corresponding thread state. This is done by storing a thread state in the thread specific storage (the [`pthread_setspecific()`](https://linux.die.net/man/3/pthread_setspecific)  library function on Unix-like systems) upon the thread state creation. So, this is the mechanism that allows any thread to access its thread state. The GIL deserves a separate post. The same is also true for the Python object system and the import mechanism, which we will also mention briefly in this post.
+
+When the first interpreter state and the first thread state are created, `pyinit_config()` calls `pycore_interp_init()` to finish the core initialization phase. The code of `pycore_interp_init()` is self-explanatory:
+
+```C
+static PyStatus
+pycore_interp_init(PyThreadState *tstate)
+{
+    PyStatus status;
+    PyObject *sysmod = NULL;
+
+    status = pycore_init_types(tstate);
+    if (_PyStatus_EXCEPTION(status)) {
+        goto done;
+    }
+
+    status = _PySys_Create(tstate, &sysmod);
+    if (_PyStatus_EXCEPTION(status)) {
+        goto done;
+    }
+
+    status = pycore_init_builtins(tstate);
+    if (_PyStatus_EXCEPTION(status)) {
+        goto done;
+    }
+
+    status = pycore_init_import_warnings(tstate, sysmod);
+
+done:
+    /* sys.modules['sys'] contains a strong reference to the module */
+    Py_XDECREF(sysmod);
+    return status;
+}
+```
+
+The `pycore_init_types()` function initializes built-in types. But what does it mean? And what are types really? As you probably know, everything you work with in Python is an object. Numbers, strings, lists, functions, modules, frame objects, user-defined classes and built-in types are all Python objects. A Python object is a C struct whose first field is of type `PyObject`. The `PyObject` type is a struct with two fields. The first field of type `Py_ssize_t` stores a reference count. The second field of type `PyTypeObject` points to the Python type of the object. Here's the definition of `PyObject`:
+
+```C
+typedef struct _object {
+    _PyObject_HEAD_EXTRA // for debugging only
+    Py_ssize_t ob_refcnt;
+    PyTypeObject *ob_type;
+} PyObject;
+```
+
+And here's an example of a more familiar Python object, `float`:
+
+```C
+typedef struct {
+    PyObject_HEAD // macro that expands to PyObject ob_base;
+    double ob_fval;
+} PyFloatObject;
+```
+
+The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. Because any Python object has `PyObject` as its first member, CPython can treat any Python object as `PyObject`, which it does all over the place. You can think of it as of C way of doing subclassing. The benifit of such a trick is that it allows to achieve polymorphism. For example, it allows to write a function that can take any Python object as an argument by taking `PyObject`.
+
+The reason why CPython can do something useful with `PyObject` is because the behaviour of a Python object is determined by its type, and `PyObject` always has a type. A type "knows" how to create the objects of that type, how to calculate their hashes, how to add them, how to call them, how to access their attributes, how to deallocate them and much more. Types are also Python objects represented by the `PyTypeObject` structure. All types have the same type, which is `PyType_Type`. And the type of `PyType_Type` points to `PyType_Type` itself. If this explanation seems complicated, this example should not:
+
+```text
+$ ./python.exe -q
+>>> type([])
+<class 'list'>
+>>> type(type([]))
+<class 'type'>
+>>> type(type(type([])))
+<class 'type'>
+```
+
+The fields of `PyTypeObject` are very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the Python/C API Reference Manual. I only leave here the definition of the struct underlying `PyTypeObject` to get an idea of the amount of information that a Python type stores:
+
+```C
+// PyTypeObject is a typedef for struct _typeobject
+struct _typeobject {
+    PyObject_VAR_HEAD // expands to 
+    				  // PyObject ob_base;
+    				  // Py_ssize_t ob_size;
+    const char *tp_name; /* For printing, in format "<module>.<name>" */
+    Py_ssize_t tp_basicsize, tp_itemsize; /* For allocation */
+
+    /* Methods to implement standard operations */
+
+    destructor tp_dealloc;
+    Py_ssize_t tp_vectorcall_offset;
+    getattrfunc tp_getattr;
+    setattrfunc tp_setattr;
+    PyAsyncMethods *tp_as_async; /* formerly known as tp_compare (Python 2)
+                                    or tp_reserved (Python 3) */
+    reprfunc tp_repr;
+
+    /* Method suites for standard classes */
+    PyNumberMethods *tp_as_number;
+    PySequenceMethods *tp_as_sequence;
+    PyMappingMethods *tp_as_mapping;
+
+    /* More standard operations (here for binary compatibility) */
+
+    hashfunc tp_hash;
+    ternaryfunc tp_call;
+    reprfunc tp_str;
+    getattrofunc tp_getattro;
+    setattrofunc tp_setattro;
+
+    /* Functions to access object as input/output buffer */
+    PyBufferProcs *tp_as_buffer;
+
+    /* Flags to define presence of optional/expanded features */
+    unsigned long tp_flags;
+
+    const char *tp_doc; /* Documentation string */
+
+    /* Assigned meaning in release 2.0 */
+    /* call function for all accessible objects */
+    traverseproc tp_traverse;
+
+    /* delete references to contained objects */
+    inquiry tp_clear;
+
+    /* Assigned meaning in release 2.1 */
+    /* rich comparisons */
+    richcmpfunc tp_richcompare;
+
+    /* weak reference enabler */
+    Py_ssize_t tp_weaklistoffset;
+
+    /* Iterators */
+    getiterfunc tp_iter;
+    iternextfunc tp_iternext;
+
+    /* Attribute descriptor and subclassing stuff */
+    struct PyMethodDef *tp_methods;
+    struct PyMemberDef *tp_members;
+    struct PyGetSetDef *tp_getset;
+    struct _typeobject *tp_base;
+    PyObject *tp_dict;
+    descrgetfunc tp_descr_get;
+    descrsetfunc tp_descr_set;
+    Py_ssize_t tp_dictoffset;
+    initproc tp_init;
+    allocfunc tp_alloc;
+    newfunc tp_new;
+    freefunc tp_free; /* Low-level free-memory routine */
+    inquiry tp_is_gc; /* For PyObject_IS_GC */
+    PyObject *tp_bases;
+    PyObject *tp_mro; /* method resolution order */
+    PyObject *tp_cache;
+    PyObject *tp_subclasses;
+    PyObject *tp_weaklist;
+    destructor tp_del;
+
+    /* Type attribute cache version tag. Added in version 2.6 */
+    unsigned int tp_version_tag;
+
+    destructor tp_finalize;
+    vectorcallfunc tp_vectorcall;
+};
+```
+
+The built-in types, such as `int ` and `list`, are implemented by statically defining instances of `PyTypeObject`, like so:
+
+```C
+PyTypeObject PyList_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    "list",
+    sizeof(PyListObject),
+    0,
+    (destructor)list_dealloc,                   /* tp_dealloc */
+    0,                                          /* tp_vectorcall_offset */
+    0,                                          /* tp_getattr */
+    0,                                          /* tp_setattr */
+    0,                                          /* tp_as_async */
+    (reprfunc)list_repr,                        /* tp_repr */
+    0,                                          /* tp_as_number */
+    &list_as_sequence,                          /* tp_as_sequence */
+    &list_as_mapping,                           /* tp_as_mapping */
+    PyObject_HashNotImplemented,                /* tp_hash */
+    0,                                          /* tp_call */
+    0,                                          /* tp_str */
+    PyObject_GenericGetAttr,                    /* tp_getattro */
+    0,                                          /* tp_setattro */
+    0,                                          /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+        Py_TPFLAGS_BASETYPE | Py_TPFLAGS_LIST_SUBCLASS, /* tp_flags */
+    list___init____doc__,                       /* tp_doc */
+    (traverseproc)list_traverse,                /* tp_traverse */
+    (inquiry)_list_clear,                       /* tp_clear */
+    list_richcompare,                           /* tp_richcompare */
+    0,                                          /* tp_weaklistoffset */
+    list_iter,                                  /* tp_iter */
+    0,                                          /* tp_iternext */
+    list_methods,                               /* tp_methods */
+    0,                                          /* tp_members */
+    0,                                          /* tp_getset */
+    0,                                          /* tp_base */
+    0,                                          /* tp_dict */
+    0,                                          /* tp_descr_get */
+    0,                                          /* tp_descr_set */
+    0,                                          /* tp_dictoffset */
+    (initproc)list___init__,                    /* tp_init */
+    PyType_GenericAlloc,                        /* tp_alloc */
+    PyType_GenericNew,                          /* tp_new */
+    PyObject_GC_Del,                            /* tp_free */
+    .tp_vectorcall = list_vectorcall,
+};
+```
+
+CPython needs also to initialize the built-in types. This is what we started our discussion of types with. All types require some initialization, for example, to add special methods, like `__call__` and `__eq__`, to the type's dictionary and point them to the corresponding `tp_*` functions. This common initialization is done by calling `PyType_Ready()` for each type:
+
+```C
+PyStatus
+_PyTypes_Init(void)
+{
+  	// The names of the special methods "__hash__", "__call_", etc. are interned by this call
+    PyStatus status = _PyTypes_InitSlotDefs();
+    if (_PyStatus_EXCEPTION(status)) {
+        return status;
+    }
+
+#define INIT_TYPE(TYPE, NAME) \
+    do { \
+        if (PyType_Ready(TYPE) < 0) { \
+            return _PyStatus_ERR("Can't initialize " NAME " type"); \
+        } \
+    } while (0)
+
+    INIT_TYPE(&PyBaseObject_Type, "object");
+    INIT_TYPE(&PyType_Type, "type");
+    INIT_TYPE(&_PyWeakref_RefType, "weakref");
+    INIT_TYPE(&_PyWeakref_CallableProxyType, "callable weakref proxy");
+    INIT_TYPE(&_PyWeakref_ProxyType, "weakref proxy");
+    INIT_TYPE(&PyLong_Type, "int");
+    INIT_TYPE(&PyBool_Type, "bool");
+    INIT_TYPE(&PyByteArray_Type, "bytearray");
+    INIT_TYPE(&PyBytes_Type, "str");
+    INIT_TYPE(&PyList_Type, "list");
+    INIT_TYPE(&_PyNone_Type, "None");
+    INIT_TYPE(&_PyNotImplemented_Type, "NotImplemented");
+    INIT_TYPE(&PyTraceBack_Type, "traceback");
+    INIT_TYPE(&PySuper_Type, "super");
+    INIT_TYPE(&PyRange_Type, "range");
+    INIT_TYPE(&PyDict_Type, "dict");
+    INIT_TYPE(&PyDictKeys_Type, "dict keys");
+    // ... 50 more types
+    return _PyStatus_OK();
+
+#undef INIT_TYPE
+}
+```
+
+Some built-in types require additional type-specific initialization. For example, the initialization of `int` is needed to preallocate small integers in the  `interp->small_ints` array so that they can be reused, and the initialization of `float` is needed to determine how the current machine represents the floating point number.
+
+When the built-in types are initialized, `pycore_interp_init()` calls  `_PySys_Create()` to create the [`sys`](https://docs.python.org/3/library/sys.html) module.
 
