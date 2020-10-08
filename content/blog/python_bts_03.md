@@ -772,10 +772,10 @@ struct _is {
     struct _ceval_state ceval;
     struct _gc_runtime_state gc;
 
-    PyObject *modules; 	// sys.modules
+    PyObject *modules; 	// sys.modules points to it
     PyObject *modules_by_index;
-    PyObject *sysdict; 	// sys.__dict__
-    PyObject *builtins; // builtins.__dict__
+    PyObject *sysdict; 	// points to sys.__dict__
+    PyObject *builtins; // points to builtins.__dict__
     PyObject *importlib;
 		
   	// A list of codec search functions
@@ -1114,5 +1114,39 @@ _PyTypes_Init(void)
 
 Some built-in types require additional type-specific initialization. For example, the initialization of `int` is needed to preallocate small integers in the  `interp->small_ints` array so that they can be reused, and the initialization of `float` is needed to determine how the current machine represents the floating point number.
 
-When the built-in types are initialized, `pycore_interp_init()` calls  `_PySys_Create()` to create the [`sys`](https://docs.python.org/3/library/sys.html) module.
+When the built-in types are initialized, `pycore_interp_init()` calls  `_PySys_Create()` to create the [`sys`](https://docs.python.org/3/library/sys.html) module. Why is the `sys` module is the first module to be created? Of course, it's very important, since it contains such things as the command line arguments passed to a program (`sys.argv`), the list of path entries to search for modules (`sys.path`), a lot of system-specific and implementation-specific data (`sys.version`, `sys.implementation`, `sys.thread_info`, ...) and various functions that allow to interact with the interpreter (`sys.addaudithook()`, `sys.settrace()`, ...). The main reason to create the `sys` module so early, tough, is to initialize `sys.modules`. It points to the `interp->modules` dictionary, which is also created by `_PySys_Create()`, and acts as a cache for all imported modules. It's the first place to look up for a module, and it's the place where all loaded modules are saved to. The import machinery heavily relies on `sys.modules`.
 
+After the call to`_PySys_Create()`, the `sys` module is only partially initialized. The functions and most of the variables are available, but invocation-specific data, such as `sys.argv` and `sys._xoptions`, and the path-related configuration, such as `sys.path` and `sys.exec_prefix`, will be set during the main inititlization phase.
+
+When the `sys` module is created, `pycore_interp_init()` calls `pycore_init_builtins()` to initialize the `builtins` module. The built-in functions, like `abs()`, `dir()` and `print()`, the built-in types, like `dict`, `int` and `str`, the built-in exceptions, like `Exception` and `ValueError`, and the built-in constants, like `False`, `Ellipsis` and `None`, are all members of the `builtins` module. The built-in functions are a part of the module definition, but other members have to be placed in the module's dictionary explicitly. The `pycore_init_builtins()` function does that. Later on, `frame->f_builtins` will be set to this dictionary to lookup global names. This is why we don't need to import `builtins` directly.
+
+The last step of the core intitialization phase is performed by the `pycore_init_import_warnings()` function. You probably know that Python has [a mechanism to issue warnings](https://docs.python.org/3/library/warnings.html), like so:
+
+```text
+$ ./python.exe -q
+>>> import imp
+<stdin>:1: DeprecationWarning: the imp module is deprecated in favour of importlib; ...
+```
+
+Warnings can be ignored, turned into exceptions and displayed in various ways. CPython has filters to do that. Some filters are turned on by default, and the `pycore_init_import_warnings()` function is what turns them on. Most crucially, tough, is that `pycore_init_import_warnings()` sets up the import system for built-in and frozen modules.
+
+The built-in and frozen modules are two special kinds of modules. What unites them is that they are compiled directly into the `python` executable. The difference is that built-in modules are written in C, while frozen modules are written in Python. How is that possible to compile a module written in Python into the executable? This is cleverly done by incorporating the binary representation of a module's code object into the C source code. To generate the binary representation, the [Freeze](https://github.com/python/cpython/tree/master/Tools/freeze) utility is used. 
+
+An example of a frozen module is `_frozen_importlib`. This is the core of the import system. Python's `import` statement eventually leads to the `_frozen_importlib._find_and_load()` function. To support the import of the built-in and frozen modules, `pycore_init_import_warnings()` calls `init_importlib()`, and the very first thing `init_importlib()` does is import `_frozen_importlib`. It may seem that CPython has to import `_frozen_importlib` in order to import `_frozen_importlib`, but this is not the case. The `_frozen_importlib` module provides a universal API for importing any module. If CPython, hovewer, knows that it needs to import a frozen module, it can do so without reliance on `_frozen_importlib`.
+
+The `_frozen_importlib` module depends on two other modules. First, it needs the `sys` module to get an access to `sys.modules`. Second, it needs the `_imp` module, which implements low-level import functions, including the functions for creating built-in and frozen modules. The problem is that `_frozen_importlib` cannot import any modules because the `import` statement depends on `_frozen_importlib` itself. The solution is to create the `_imp` module in `init_importlib()` and inject it and the `sys` module in `_frozen_importlib` by calling `_frozen_importlib._install(sys, _imp)`. This bootstrapping of the import system ends the core initialization phase. 
+
+We leave `pyinit_core()` and enter `pyinit_main()`, which performs the main initialization phase. We find that it does some checks and calls `init_interp_main()` to do the work. The work can be summarized as follows:
+
+1. Get system's realtime and monotonic clocks, ensure that `time.time()`, `time.monotonic()` and `time.perf_counter()` will work correctly.
+2. Finish the initialization of the `sys` module. This includes setting the path configuration variables, such as `sys.path`, `sys.executable` and `sys.exec_prefix`, and invocation-specific variables, such as `sys.argv` and `sys._xoptions`.
+3. Add support for the import of path-based (external) modules. This is done by importing another frozen module called `importlib._bootstrap_external`. It enables the import of modules based on `sys.path`. Also, the [`zipimport`](https://docs.python.org/3/library/zipimport.html) frozen module is imported. It enables the import of modules from ZIP archives, i.e. the directories listed in the `sys.path` can be ZIP archives.
+4. Normalize the names of the encodings for the file system and the standard streams. Set the error handlers for encoding and decoding when dealing with the file system.
+5. Install default signal handlers. These are the handlers that get executed when a process receives a signal like `SIGINT`. The custom handlers can be set up using the [`signal`](https://docs.python.org/3/library/signal.html) module.
+6. Import the `io` module and initialize `sys.stdin`, `sys.stdout` and `sys.stderr`. This is essentially done by calling `io.open()` on the file descriptors for the standard streams.
+7. Set `builtins.open` to `io.OpenWrapper`, so that `open()` is available as a built-in function.
+8. Create the `__main__` module, set `__main__.__builtins__` to `builtins` and `__main__.loader` to `_frozen_importlib.BuiltinImporter`. At this point, the `__main__` module contains nothing else.
+9. Import [`warnings`](https://docs.python.org/3/library/warnings.html) and [`site `](https://docs.python.org/3/library/site.html) modules. The `site` module adds the site-specific directories to `sys.path`. This is why `sys.path` normally contains a directoiry with the installed modules like  `/usr/local/lib/python3.9/site-packages/`.
+10. Set `interp->runtime->initialized = 1`
+
+The initialization of CPython is completed. The `pymain_init()` function returns, and we step into `Py_RunMain()` to see what else CPython does before it enters the evaluation loop.
