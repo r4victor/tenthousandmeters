@@ -1,7 +1,6 @@
 Title: Python behind the scenes #3: stepping through the CPython source code
 Date: 2020-10-11 7:02
 Tags: Python behind the scenes, Python, CPython
-Status: Draft
 Summary: In [the first]({filename}/blog/python_bts_01.md) and [the second]({filename}/blog/python_bts_02.md) parts of this series we explored the ideas behind the execution and the compilation of a Python program. We'll continue to focus on ideas in the next parts but this time we'll make an exception and look at the actual code that brings those ideas to life.<br><br>
 
 In [the first]({filename}/blog/python_bts_01.md) and [the second]({filename}/blog/python_bts_02.md) parts of this series we explored the ideas behind the execution and the compilation of a Python program. We'll continue to focus on ideas in the next parts but this time we'll make an exception and look at the actual code that brings those ideas to life. 
