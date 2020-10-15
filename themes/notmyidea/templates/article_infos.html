@@ -2,12 +2,6 @@
         <abbr class="published" title="{{ article.date.isoformat() }}">
                 Published: {{ article.locale_date }}
         </abbr>
-        {% if article.modified %}
-		<br />
-        <abbr class="modified" title="{{ article.modified.isoformat() }}">
-                Updated: {{ article.locale_modified }}
-        </abbr>
-        {% endif %}
 
         {% if article.authors %}
         <address class="vcard author">
