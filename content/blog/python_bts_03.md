@@ -1880,7 +1880,7 @@ fail: /* Jump here from prelude on failure */
 }
 ```
 
-`_PyEval_EvalCode()` is a wrapper around `interp->eval_frame()`, which is the frame evaluation function. It's possible to set  `interp->eval_frame()` to a custom function. Why would someone want to do that? For example, it allows to add a JIT compiler to CPython by replacing the default evaluation function with the one that stores compiled machine code in a code object and runs it. [PEP 523](https://www.python.org/dev/peps/pep-0523/) introduced this functionality in CPython 3.6.
+`_PyEval_EvalFrame()` is a wrapper around `interp->eval_frame()`, which is the frame evaluation function. It's possible to set  `interp->eval_frame()` to a custom function. Why would someone want to do that? For example, it allows to add a JIT compiler to CPython by replacing the default evaluation function with the one that stores compiled machine code in a code object and runs it. [PEP 523](https://www.python.org/dev/peps/pep-0523/) introduced this functionality in CPython 3.6.
 
 By default, `interp->eval_frame()` is set to `_PyEval_EvalFrameDefault()`. This function, defined in `Python/ceval.c`, consists of almost 3,000 lines. Today, tough, we're only interested in one. Line 1336 of `Python/ceval.c` begins what we've been waiting for so long: the evaluation loop.
 
