@@ -98,7 +98,7 @@ Don't worry if some members of the above structures are still a mystery to you. 
 
 ### Overview of the evaluation loop
 
-The problem of executing Python bytecode may seem a no-brainer to you. Indeed, all CPython has to do is to iterate over the instructions and to act according to them. And this is what essentially `_PyEval_EvalFrameDefault()` does. It contains an infinite `for (;;)` loop that we refer to as the evaluation loop. Inside that loop there is a giant switch statement over all possible opcodes. The bytecode is represented by an array of 16-bit unsigned integers, one element per instruction. CPython keeps track of the next instruction to be executed using the `next_instr` variable, which is a pointer to the array of instructions. At the start of each iteration of the evaluation loop, CPython calculates the next opcode and its argument by taking the least significant and the most significant byte of the next instruction respectively and increments `next_instr`. The `_PyEval_EvalFrameDefault()` function is nearly 3000 lines long, but its essence can be captured by the following simplified version:
+The problem of executing Python bytecode may seem a no-brainer to you. Indeed, all CPython has to do is to iterate over the instructions and to act according to them. And this is what essentially `_PyEval_EvalFrameDefault()` does. It contains an infinite `for (;;)` loop that we refer to as the evaluation loop. Inside that loop there is a giant `switch` statement over all possible opcodes. The bytecode is represented by an array of 16-bit unsigned integers, one integer per instruction. CPython keeps track of the next instruction to be executed using the `next_instr` variable, which is a pointer to the array of instructions. At the start of each iteration of the evaluation loop, CPython calculates the next opcode and its argument by taking the least significant and the most significant byte of the next instruction respectively and increments `next_instr`. The `_PyEval_EvalFrameDefault()` function is nearly 3000 lines long, but its essence can be captured by the following simplified version:
 
 ```C
 PyObject*
@@ -186,17 +186,23 @@ The result of ORing all indicators together is stored in the `eval_breaker` vari
 
 #### computed GOTOs
 
-The code for the evaluation loop is full of macros such as `TARGET()` and `DISPATCH()`. These are not the means to make the code more compact. They expand to different code depending on whether the certain optimization, referred to as "computed GOTOs", is used. They goal of this optimization is to speed up the bytecode execution by writing code in such a way, so that a CPU can use its [branch prediction mechanism](https://en.wikipedia.org/wiki/Branch_predictor) to predict the next opcode.
+The code for the evaluation loop is full of macros such as `TARGET()` and `DISPATCH()`. These are not the means to make the code more compact. They expand to different code depending on whether the certain optimization, referred to as "computed GOTOs" (a.k.a. "threaded code"), is used. They goal of this optimization is to speed up the bytecode execution by writing code in such a way, so that a CPU can use its [branch prediction mechanism](https://en.wikipedia.org/wiki/Branch_predictor) to predict the next opcode.
 
 After executing any given instruction, CPython does one of three things:
 
 * It returns from the evaluation function. This happens when CPython executes `RETURN_VALUE`, `YIELD_VALUE` or `YIELD_FROM` instruction.
 * It handles the error and either continues the execution or returns from the evaluation function with the exception set. The error can occur when, for example, CPython executes the `BINARY_ADD` instruction and the objects to be added do not implement `__add__` and `__radd__` methods.
-* It continues the execution. How does it do that? You might expect that the cases just end with the `continue` statement. The reality, though, is a little bit more complicated.
+* It continues the execution. How does it do that? The simplest solution would be to end each non-returning case block with the `continue` statement. The real solution, tough, is a little bit more complicated.
 
-To understand what's the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the case blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the switch control flow is effectively implemented as a single indirect jump. It's fast, but the problem is that a CPU has a little chance of predicting the next opcode. The best it can do is to choose the last opcode or, possibly, the most frequent one. The idea of the optimization is to have a separate jump in the end of each non-returning case block. A CPU can then predict the next opcode as the most probable opcode following the current one.
+To understand what's the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the case blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the switch control flow is effectively implemented as a single indirect jump. This is an efficient way to implement `switch`. Hovewer, placing `switch` inside the loop and adding `continue` statements creates two inefficiencies:
 
-The optimization can be enabled or disabled. It depends on whether the compiler supports the GCC C extension called ["Labels as Values"](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html) or not. The effect of enabling the optimization is that the certain macros, such as `TARGET()`, `DISPATCH()` and `FAST_DISPATCH()`, expand in different way. These macros are used extensively throughout the code of the evaluation loop. Every case expression has a form `TARGET(op)`, where  `op` is a macro for the integer literal representing an opcode. And every non-returning case block ends with `DISPATCH()` or `FAST_DISPATCH()` macro. Let's first look at what these macros expand to when the optimization is disabled:
+* The `continue` statement in the end of a case block adds another jump. Thus, to execute an opcode, the VM has to jump twice: to the start of the loop and then to the next case block.
+
+* Since all opcodes are dispatched by a single jump, a CPU has a little chance of predicting the next opcode. The best it can do is to choose the last opcode or, possibly, the most frequent one. 
+
+The idea of the optimization is to place a separate dispatch jump in the end of each non-returning case block. First, it saves a jump. Second, a CPU can predict the next opcode as the most probable opcode following the current one.
+
+The optimization can be enabled or disabled. It depends on whether the compiler supports the GCC C extension called ["labels as values"](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html) or not. The effect of enabling the optimization is that the certain macros, such as `TARGET()`, `DISPATCH()` and `FAST_DISPATCH()`, expand in different way. These macros are used extensively throughout the code of the evaluation loop. Every case expression has a form `TARGET(op)`, where  `op` is a macro for the integer literal representing an opcode. And every non-returning case block ends with `DISPATCH()` or `FAST_DISPATCH()` macro. Let's first look at what these macros expand to when the optimization is disabled:
 
 ```C
 
@@ -233,7 +239,7 @@ fast_next_opcode:
 
 The `FAST_DISPATCH()` is used for some opcode when it's undesirable to suspend the evaluation loop after executing that opcode. Otherwise, the implementation is very straightforward.
 
-If the compiler supports "Labels as Values" extension, we can use the unary `&&` operator on a label to get its address. It has a value of type `void *`, which we can store in a pointer:
+If the compiler supports "labels as values" extension, we can use the unary `&&` operator on a label to get its address. It has a value of type `void *`, which we can store in a pointer:
 
 ```C
 void *ptr;
@@ -269,7 +275,7 @@ static void *opcode_targets[256] = {
 
 ```
 
-Here's how the optimized version of the evaluation loop looks like:
+Here's what the optimized version of the evaluation loop looks like:
 
 ```C
 for (;;) {
@@ -314,4 +320,132 @@ fast_next_opcode:
 The extension is supported by the GCC and Clang compilers. So, when you run `python`, you probably have the optimization enabled. The question is how it affects the performance. Here, I'll rely on the comment from the source code:
 
 > At the time of this writing, the "threaded code" version is up to 15-20% faster than the normal "switch" version, depending on the compiler and the CPU architecture.
+
+This section should give us an idea of how the CPython VM goes from one instruction to the next and what it may do in between. The next logical step is to study in more depth how the VM executes a single instruction.
+
+### General principles of the bytecode execution
+
+CPython 3.9 has [119 different opcodes](https://docs.python.org/3/library/dis.html#python-bytecode-instructions). Of course, we're not going to study the implementation of each opcode in this post. Instead, we'll focus on the general principles that are used to implement them.
+
+#### value stack
+
+The most important and, fortunately, very simple fact about the CPython VM is that it's stack-based. This means that to compute things, the VM pops (or peeks) values from the stack, performs the computation on them and pushes the result back. Here's some examples:
+
+* The `UNARY_NEGATIVE` opcode pops value from the stack, negates it and pushes the result.
+* The `GET_ITER` opcode pops value from the stack, calls `iter()` on it and pushes the result.
+* The `BINARY_ADD` opcode pops value from the stack, peeks another value from the top, adds the first value to the second and replaces the top value with the result.
+
+The value stack resides in a frame object. It's implemented as a part of the array called `f_localsplus`. The array is splitted into several parts to store different things, but, for now, we're interested only in the last part that is used for the value stack. The `f_valuestack` field of a frame object points to the start of the stack. To locate the top of the stack, CPython keeps the `stack_pointer` local variable, which points to the next slot after the top of the stack. The elements of the `f_localsplus` array are pointers to Python objects, and pointers to Python objects is what the CPython VM actually works with.
+
+#### error handling and block stack
+
+Not all computations performed by the VM are successful. Suppose we try to add a string to a number like `1 + '41'`. The compiler produces the `BINARY_ADD` opcode to add two objects. When the VM executes this opcode, it calls `PyNumber_Add()` to calculate the result:
+
+```C
+case TARGET(BINARY_ADD): {
+    PyObject *right = POP();
+    PyObject *left = TOP();
+    PyObject *sum;
+    // ... special case of string addition
+    sum = PyNumber_Add(left, right);
+    Py_DECREF(left);
+    Py_DECREF(right);
+    SET_TOP(sum);
+    if (sum == NULL)
+      	goto error;
+    DISPATCH();
+}
+```
+
+What's important for us now is not how `PyNumber_Add()` is implemented, but that the call to it results in an error. The error means two things:
+
+* `PyNumber_Add()` returns `NULL`.
+* `PyNumber_Add()` sets the current exception to the `TypeError` exception. This involves setting  `tstate->curexc_type`, `tstate->curexc_value` and `tstate->curexc_traceback`.
+
+`NULL`  is an indicator for an error. The VM sees it and goes to the `error` label at the end of the evaluation loop. What happens next depends on whether we've set up any exception handlers or not. If we haven't, the VM reaches the `break` statement and the evaluation function returns `NULL` with the exception set on the thread state. CPython prints the details of the exception and exits. We get the expected result:
+
+```text
+$ python -c "1 + '42'"
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+```
+
+But suppose that we place the same code inside the `try` clause of the `try-finally` statement. In this case, the code inside the `finally` clause is executed as well:
+
+```text
+$ python -q
+>>> try:
+...     1 + '41'
+... finally:
+...     print('Hey!')
+... 
+Hey!
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+```
+
+How can the VM continue the execution after the error has occured? Let's look at the bytecode produced by the compiler for the `try-finally` statement:
+
+```
+$ python -m dis try-finally.py
+
+  1           0 SETUP_FINALLY           20 (to 22)
+
+  2           2 LOAD_CONST               0 (1)
+              4 LOAD_CONST               1 ('41')
+              6 BINARY_ADD
+              8 POP_TOP
+             10 POP_BLOCK
+
+  4          12 LOAD_NAME                0 (print)
+             14 LOAD_CONST               2 ('Hey!')
+             16 CALL_FUNCTION            1
+             18 POP_TOP
+             20 JUMP_FORWARD            10 (to 32)
+        >>   22 LOAD_NAME                0 (print)
+             24 LOAD_CONST               2 ('Hey!')
+             26 CALL_FUNCTION            1
+             28 POP_TOP
+             30 RERAISE
+        >>   32 LOAD_CONST               3 (None)
+             34 RETURN_VALUE
+```
+
+Note the `SETUP_FINALLY` and `POP_BLOCK` opcodes. The first one sets up the exception handler and the second one removes it. If an error occurs while the VM executes the instructions between them, the execution continues with the instruction at offset 22, which is the start of the `finally` clause. Otherwise, the `finally` clause is executed after the `try` clause. In both cases, the bytecode for the `finally` clause is almost identical. The only difference is that the handler reraises the exception set in the `try` clause.
+
+An exception handler is implemented as a simple C struct called block:
+
+```C
+typedef struct {
+    int b_type;                 /* what kind of block this is */
+    int b_handler;              /* where to jump to find handler */
+    int b_level;                /* value stack level to pop to */
+} PyTryBlock;
+```
+
+The VM keeps blocks in the block stack. To setup an exception handler means to push a new block onto the block stack. This is what opcodes like `SETUP_FINALLY` do. The `error` label points to a piece of code that tries to handle an error using blocks on the block stack. The VM unwinds the block stack until it finds the top-most block of type `SETUP_FINALLY`. It restores the level of the value stack to the level specified by the `b_level` field of the block and continues to execute the bytecode with the instruction at offset `b_handler`. This is basically how CPython implements statements like `try-except`, `try-finally` and `with`. 
+
+There is one more thing to say about exception handling. Think of what happens when an error occurs while the VM handles an exception:
+
+```text
+$ python -q
+>>> try:
+...     1 + '41'
+... except:
+...     1/0
+... 
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+ZeroDivisionError: division by zero
+```
+
+As expected, CPython prints the original exception. To implement such behavior, when CPython handles an exception using a `SETUP_FINALLY` block, it sets up another block of type `EXCEPT_HANDLER`. If an error occurs when this block is on the block stack, the VM gets the original exception from the value stack and sets it as the current one.
 
