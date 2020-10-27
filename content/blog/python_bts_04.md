@@ -4,6 +4,8 @@ Tags: Python behind the scenes, Python, CPython
 
 We started this series with an overview of the CPython VM. We learned that to run a Python program, CPython first compiles it to bytecode, and we studied how the compiler works in part two. Last time we stepped through the CPython source code starting with the `main()` function until we reached the evaluation loop, a place where Python bytecode gets executed. While all this may be very interesting in itself, the main reason why we spent time on it was to prepare for the discussion that we start today. The goal of this discussion is to understand how CPython executes the bytecode.
 
+**Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
+
 ### Starting point
 
 Let's briefly recall what we learned in the previous parts. We tell CPython what to do by writing Python code. The CPython VM, hovewer, understands only Python bytecode. This is the job of the compiler to translate Python code to bytecode. The compiler stores bytecode in a code object, which is a structure that fully describes what a code block, like a module or a function body, does. To execute a code object, CPython first creates a state of execution for it called a frame object. Then it passes a frame object to a frame evaluation function to perform the actual computation. The default frame evaluation function is `_PyEval_EvalFrameDefault()`. This function implements the core of the CPython VM. Namely, it implements the logic for the execution of Python bytecode. So, this function is what we're going to study today.
@@ -94,7 +96,7 @@ struct PyCodeObject {
 
 The most important field of a code object is `co_code`. It's a pointer to a Python bytes object representing the bytecode. The bytecode is a sequence of two-byte instructions: one byte for an opcode and one byte for an argument.
 
-Don't worry if some members of the above structures are still a mystery to you. We'll see what they are used for as we move forward in our attempt to understand how CPython executes bytecode. 
+Don't worry if some members of the above structures are still a mystery to you. We'll see what they are used for as we move forward in our attempt to understand how CPython executes bytecode.
 
 ### Overview of the evaluation loop
 
@@ -192,17 +194,17 @@ After executing any given instruction, CPython does one of three things:
 
 * It returns from the evaluation function. This happens when CPython executes `RETURN_VALUE`, `YIELD_VALUE` or `YIELD_FROM` instruction.
 * It handles the error and either continues the execution or returns from the evaluation function with the exception set. The error can occur when, for example, CPython executes the `BINARY_ADD` instruction and the objects to be added do not implement `__add__` and `__radd__` methods.
-* It continues the execution. How does it do that? The simplest solution would be to end each non-returning case block with the `continue` statement. The real solution, tough, is a little bit more complicated.
+* It continues the execution. How does it do that? The simplest solution would be to end each non-returning `case` block with the `continue` statement. The real solution, tough, is a little bit more complicated.
 
-To understand what's the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the case blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the switch control flow is effectively implemented as a single indirect jump. This is an efficient way to implement `switch`. Hovewer, placing `switch` inside the loop and adding `continue` statements creates two inefficiencies:
+To understand what's the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the `case` blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the switch control flow is effectively implemented as a single indirect jump. This is an efficient way to implement `switch`. Hovewer, placing `switch` inside the loop and adding `continue` statements creates two inefficiencies:
 
-* The `continue` statement in the end of a case block adds another jump. Thus, to execute an opcode, the VM has to jump twice: to the start of the loop and then to the next case block.
+* The `continue` statement in the end of a `case` block adds another jump. Thus, to execute an opcode, the VM has to jump twice: to the start of the loop and then to the next `case` block.
 
 * Since all opcodes are dispatched by a single jump, a CPU has a little chance of predicting the next opcode. The best it can do is to choose the last opcode or, possibly, the most frequent one. 
 
-The idea of the optimization is to place a separate dispatch jump in the end of each non-returning case block. First, it saves a jump. Second, a CPU can predict the next opcode as the most probable opcode following the current one.
+The idea of the optimization is to place a separate dispatch jump in the end of each non-returning `case` block. First, it saves a jump. Second, a CPU can predict the next opcode as the most probable opcode following the current one.
 
-The optimization can be enabled or disabled. It depends on whether the compiler supports the GCC C extension called ["labels as values"](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html) or not. The effect of enabling the optimization is that the certain macros, such as `TARGET()`, `DISPATCH()` and `FAST_DISPATCH()`, expand in different way. These macros are used extensively throughout the code of the evaluation loop. Every case expression has a form `TARGET(op)`, where  `op` is a macro for the integer literal representing an opcode. And every non-returning case block ends with `DISPATCH()` or `FAST_DISPATCH()` macro. Let's first look at what these macros expand to when the optimization is disabled:
+The optimization can be enabled or disabled. It depends on whether the compiler supports the GCC C extension called ["labels as values"](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html) or not. The effect of enabling the optimization is that the certain macros, such as `TARGET()`, `DISPATCH()` and `FAST_DISPATCH()`, expand in different way. These macros are used extensively throughout the code of the evaluation loop. Every case expression has a form `TARGET(op)`, where  `op` is a macro for the integer literal representing an opcode. And every non-returning `case` block ends with `DISPATCH()` or `FAST_DISPATCH()` macro. Let's first look at what these macros expand to when the optimization is disabled:
 
 ```C
 
@@ -321,13 +323,9 @@ The extension is supported by the GCC and Clang compilers. So, when you run `pyt
 
 > At the time of this writing, the "threaded code" version is up to 15-20% faster than the normal "switch" version, depending on the compiler and the CPU architecture.
 
-This section should give us an idea of how the CPython VM goes from one instruction to the next and what it may do in between. The next logical step is to study in more depth how the VM executes a single instruction.
+This section should give us an idea of how the CPython VM goes from one instruction to the next and what it may do in between. The next logical step is to study in more depth how the VM executes a single instruction. CPython 3.9 has [119 different opcodes](https://docs.python.org/3/library/dis.html#python-bytecode-instructions). Of course, we're not going to study the implementation of each opcode in this post. Instead, we'll focus on the general principles that the VM uses to execute them.
 
-### General principles of the bytecode execution
-
-CPython 3.9 has [119 different opcodes](https://docs.python.org/3/library/dis.html#python-bytecode-instructions). Of course, we're not going to study the implementation of each opcode in this post. Instead, we'll focus on the general principles that are used to implement them.
-
-#### value stack
+### Value stack
 
 The most important and, fortunately, very simple fact about the CPython VM is that it's stack-based. This means that to compute things, the VM pops (or peeks) values from the stack, performs the computation on them and pushes the result back. Here's some examples:
 
@@ -337,7 +335,7 @@ The most important and, fortunately, very simple fact about the CPython VM is th
 
 The value stack resides in a frame object. It's implemented as a part of the array called `f_localsplus`. The array is splitted into several parts to store different things, but, for now, we're interested only in the last part that is used for the value stack. The `f_valuestack` field of a frame object points to the start of the stack. To locate the top of the stack, CPython keeps the `stack_pointer` local variable, which points to the next slot after the top of the stack. The elements of the `f_localsplus` array are pointers to Python objects, and pointers to Python objects is what the CPython VM actually works with.
 
-#### error handling and block stack
+### Error handling and block stack
 
 Not all computations performed by the VM are successful. Suppose we try to add a string to a number like `1 + '41'`. The compiler produces the `BINARY_ADD` opcode to add two objects. When the VM executes this opcode, it calls `PyNumber_Add()` to calculate the result:
 
@@ -447,5 +445,18 @@ Traceback (most recent call last):
 ZeroDivisionError: division by zero
 ```
 
-As expected, CPython prints the original exception. To implement such behavior, when CPython handles an exception using a `SETUP_FINALLY` block, it sets up another block of type `EXCEPT_HANDLER`. If an error occurs when this block is on the block stack, the VM gets the original exception from the value stack and sets it as the current one.
+As expected, CPython prints the original exception. To implement such behavior, when CPython handles an exception using a `SETUP_FINALLY` block, it sets up another block of type `EXCEPT_HANDLER`. If an error occurs when a block of this type is on the block stack, the VM gets the original exception from the value stack and sets it as the current one.
+
+The block stack is implemented as the `f_blockstack` array in a frame object. The size of the array is statically defined to 20. So, if you nest more than 20 `try` clauses, you get `SyntaxError: too many statically nested blocks`.
+
+### Summary
+
+Today we've learned that the CPython VM executes bytecode instructions one by one in an infinite loop. The loop contains a `switch` statement over all possible opcodes. Each opcode is executed in the corresponding `case` block. The evaluation function runs in a thread and sometimes that thread suspends the loop to do something else. For example, a thread may need to release the GIL, so that other thread can take it and continue to execute its bytecode. To speed up the bytecode execution, CPython employs an optimization that allows to make use of the CPU's branch prediction mechanism. A comment says that it makes CPython 15-20% faster.
+
+We've also looked at two data structures crucial for the bytecode execution:
+
+* the value stack that the VM uses to compute things; and
+* the block stack that the VM uses to handle exceptions.
+
+The most important conclusion from the post is this: if you want to study the implementation of some aspect of Python, the evaluation loop is a perfect place to start. Want to know what happens when you write `x + y`? Take a look at the code for the `BINARY_ADD` opcode. Want to know how the `with` statement is implemented? See `SETUP_WITH`. Interested in the exact semantics of a function call? The `CALL_FUNCTION` opcode is what you're looking for. We'll apply this method next time when study how variables are implemented in CPython.
 
