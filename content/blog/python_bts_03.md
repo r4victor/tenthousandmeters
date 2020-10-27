@@ -47,7 +47,7 @@ Modules/                config.guess
 Some of the listed subdirectories are of particular importance to us in the course of this series:
 
 * `Grammar/` contains the grammar files we discussed last time.
-* `Include/` contains header files. These header files are used both by CPython and by the users of the [Python/C API](Python/C API).
+* `Include/` contains header files. These header files are used both by CPython and by the users of the [Python/C API](https://docs.python.org/3/c-api/index.html).
 * `Lib/` contains standard library modules written in Python. While some modules, such as ` argparse` and `wave`, are written in Python entirely, many wrap C code. For example, the Python `io` module  wraps the C `_io` module.
 * `Modules/` contains standard library modules written in C. While some modules, such as `itertools`, are intended to be imported directly, others are wrapped by the Python modules.
 * `Objects/` contains the implementations of the built-in types. If you want to understand how `int` or `list` are implemented, this is the ultimate place to go to.
