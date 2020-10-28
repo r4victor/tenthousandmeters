@@ -8,5 +8,5 @@
 
 # project specific
 
-/etc/ssl/dhparams.pem
+/etc/ssl/
 /output/
