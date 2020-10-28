@@ -2,13 +2,13 @@ Title: Python behind the scenes #4: how Python bytecode is executed
 Date: 2020-10-15 14:15
 Tags: Python behind the scenes, Python, CPython
 
-We started this series with an overview of the CPython VM. We learned that to run a Python program, CPython first compiles it to bytecode, and we studied how the compiler works in part two. Last time we stepped through the CPython source code starting with the `main()` function until we reached the evaluation loop, a place where Python bytecode gets executed. While all this may be very interesting in itself, the main reason why we spent time on it was to prepare for the discussion that we start today. The goal of this discussion is to understand how CPython executes the bytecode.
+We started this series with [an overview of the CPython VM]({filename}/blog/python_bts_01.md). We learned that to run a Python program, CPython first compiles it to bytecode, and we studied how the compiler works in [part two]({filename}/blog/python_bts_02.md). [Last time]({filename}/blog/python_bts_03.md) we stepped through the CPython source code starting with the `main()` function until we reached the evaluation loop, a place where Python bytecode gets executed. While all this may be very interesting in itself, the main reason why we spent time on it was to prepare for the discussion that we start today. The goal of this discussion is to understand how CPython executes the bytecode.
 
 **Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
 ### Starting point
 
-Let's briefly recall what we learned in the previous parts. We tell CPython what to do by writing Python code. The CPython VM, hovewer, understands only Python bytecode. This is the job of the compiler to translate Python code to bytecode. The compiler stores bytecode in a code object, which is a structure that fully describes what a code block, like a module or a function body, does. To execute a code object, CPython first creates a state of execution for it called a frame object. Then it passes a frame object to a frame evaluation function to perform the actual computation. The default frame evaluation function is `_PyEval_EvalFrameDefault()`. This function implements the core of the CPython VM. Namely, it implements the logic for the execution of Python bytecode. So, this function is what we're going to study today.
+Let's briefly recall what we learned in the previous parts. We tell CPython what to do by writing Python code. The CPython VM, however, understands only Python bytecode. This is the job of the compiler to translate Python code to bytecode. The compiler stores bytecode in a code object, which is a structure that fully describes what a code block, like a module or a function, does. To execute a code object, CPython first creates a state of execution for it called a frame object. Then it passes a frame object to a frame evaluation function to perform the actual computation. The default frame evaluation function is `_PyEval_EvalFrameDefault()` defined in [Python/ceval.c](https://github.com/python/cpython/blob/3.9/Python/ceval.c#L889). This function implements the core of the CPython VM. Namely, it implements the logic for the execution of Python bytecode. So, this function is what we're going to study today.
 
 To understand how `_PyEval_EvalFrameDefault()` works, it is crucial to have an idea of what its input, a frame object, is. A frame object is a Python object defined by the following C struct:
 
@@ -96,11 +96,11 @@ struct PyCodeObject {
 
 The most important field of a code object is `co_code`. It's a pointer to a Python bytes object representing the bytecode. The bytecode is a sequence of two-byte instructions: one byte for an opcode and one byte for an argument.
 
-Don't worry if some members of the above structures are still a mystery to you. We'll see what they are used for as we move forward in our attempt to understand how CPython executes bytecode.
+Don't worry if some members of the above structures are still a mystery to you. We'll see what they are used for as we move forward in our attempt to understand how the CPython VM executes the bytecode.
 
 ### Overview of the evaluation loop
 
-The problem of executing Python bytecode may seem a no-brainer to you. Indeed, all CPython has to do is to iterate over the instructions and to act according to them. And this is what essentially `_PyEval_EvalFrameDefault()` does. It contains an infinite `for (;;)` loop that we refer to as the evaluation loop. Inside that loop there is a giant `switch` statement over all possible opcodes. The bytecode is represented by an array of 16-bit unsigned integers, one integer per instruction. CPython keeps track of the next instruction to be executed using the `next_instr` variable, which is a pointer to the array of instructions. At the start of each iteration of the evaluation loop, CPython calculates the next opcode and its argument by taking the least significant and the most significant byte of the next instruction respectively and increments `next_instr`. The `_PyEval_EvalFrameDefault()` function is nearly 3000 lines long, but its essence can be captured by the following simplified version:
+The problem of executing Python bytecode may seem a no-brainer to you. Indeed, all the VM has to do is to iterate over the instructions and to act according to them. And this is what essentially `_PyEval_EvalFrameDefault()` does. It contains an infinite `for (;;)` loop that we refer to as the evaluation loop. Inside that loop there is a giant `switch` statement over all possible opcodes. Each opcode has a corresponding `case` block containing the code for executing that opcode. The bytecode is represented by an array of 16-bit unsigned integers, one integer per instruction. The VM keeps track of the next instruction to be executed using the `next_instr` variable, which is a pointer to the array of instructions. At the start of each iteration of the evaluation loop, the VM calculates the next opcode and its argument by taking the least significant and the most significant byte of the next instruction respectively and increments `next_instr`. The `_PyEval_EvalFrameDefault()` function is nearly 3000 lines long, but its essence can be captured by the following simplified version:
 
 ```C
 PyObject*
@@ -140,14 +140,14 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, PyFrameObject *f, int throwflag)
 }
 ```
 
-To get a more realistic picture, let's disscuss some of the omitted pieces in more detail.
+To get a more realistic picture, let's discuss some of the omitted pieces in more detail.
 
 #### reasons to suspend the loop
 
 From time to time, the currently running thread stops executing the bytecode to do something else or to do nothing. This can happen due to one of the four reasons:
 
 * There are signals to handle. When you register a function as a signal handler using [`signal.signal()`](https://docs.python.org/3/library/signal.html#signal.signal), CPython stores this function in the array of handlers. The function that is actually will be called when a thread receives a signal is `signal_handler()` (it's passed to the [`sigaction()`](https://www.man7.org/linux/man-pages/man2/sigaction.2.html) library function on Unix-like systems). When called, `signal_handler()` sets a boolean variable telling that the function in the array of handlers corresponding to the received signal has to be called. Periodically, the main thread of the main interpreter calls the tripped handlers.
-* There are pending calls to call. Pending calls is a mechanism that allows to shedule a function to be executed from the main thread. This mechanism is exposed by the Python/C API via the [`Py_AddPendingCall()`](https://docs.python.org/3/c-api/init.html#c.Py_AddPendingCall) function.
+* There are pending calls to call. Pending calls is a mechanism that allows to schedule a function to be executed from the main thread. This mechanism is exposed by the Python/C API via the [`Py_AddPendingCall()`](https://docs.python.org/3/c-api/init.html#c.Py_AddPendingCall) function.
 * The asynchronous exception is raised. The asynchronous exception is an exception set in one thread from another. This can be done using the [`PyThreadState_SetAsyncExc()`](https://docs.python.org/3/c-api/init.html#c.PyThreadState_SetAsyncExc) function provided by the Python/C API.
 * The currently running thread is requested to drop the GIL. When it sees such a request, it drops the GIL and waits until it acquires the GIL again.
 
@@ -184,19 +184,19 @@ struct _ceval_state {
 };
 ```
 
-The result of ORing all indicators together is stored in the `eval_breaker` variable. It tells whether there is any reason for the currently running thread to stop its normal bytecode execution. Each iteration of the evaluation loop starts with the check whether `eval_breaker` is true. If it is true, the thread checks the indicators to determine what exactly it is asked to do, does that and continues executing the bytecode.
+The result of ORing all indicators together is stored in the `eval_breaker` variable. It tells whether there is any reason for the currently running thread to stop its normal bytecode execution. Each iteration of the evaluation loop starts with the check whether `eval_breaker` is true. If it is true, the thread checks the indicators to determine what exactly it is asked to do, does that and continues to execute the bytecode.
 
 #### computed GOTOs
 
 The code for the evaluation loop is full of macros such as `TARGET()` and `DISPATCH()`. These are not the means to make the code more compact. They expand to different code depending on whether the certain optimization, referred to as "computed GOTOs" (a.k.a. "threaded code"), is used. They goal of this optimization is to speed up the bytecode execution by writing code in such a way, so that a CPU can use its [branch prediction mechanism](https://en.wikipedia.org/wiki/Branch_predictor) to predict the next opcode.
 
-After executing any given instruction, CPython does one of three things:
+After executing any given instruction, the VM does one of the three things:
 
-* It returns from the evaluation function. This happens when CPython executes `RETURN_VALUE`, `YIELD_VALUE` or `YIELD_FROM` instruction.
-* It handles the error and either continues the execution or returns from the evaluation function with the exception set. The error can occur when, for example, CPython executes the `BINARY_ADD` instruction and the objects to be added do not implement `__add__` and `__radd__` methods.
-* It continues the execution. How does it do that? The simplest solution would be to end each non-returning `case` block with the `continue` statement. The real solution, tough, is a little bit more complicated.
+* It returns from the evaluation function. This happens when the VM executes `RETURN_VALUE`, `YIELD_VALUE` or `YIELD_FROM` instruction.
+* It handles the error and either continues the execution or returns from the evaluation function with the exception set. The error can occur when, for example, the VM executes the `BINARY_ADD` instruction and the objects to be added do not implement `__add__` and `__radd__` methods.
+* It continues the execution. How to forward the VM to execute the next instruction? The simplest solution would be to end each non-returning `case` block with the `continue` statement. The real solution, tough, is a little bit more complicated.
 
-To understand what's the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the `case` blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the switch control flow is effectively implemented as a single indirect jump. This is an efficient way to implement `switch`. Hovewer, placing `switch` inside the loop and adding `continue` statements creates two inefficiencies:
+To see the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the `case` blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the dispatching of cases is effectively implemented as a single indirect jump. This is an efficient way to implement `switch`. However, placing `switch` inside the loop and adding `continue` statements creates two inefficiencies:
 
 * The `continue` statement in the end of a `case` block adds another jump. Thus, to execute an opcode, the VM has to jump twice: to the start of the loop and then to the next `case` block.
 
@@ -239,14 +239,12 @@ fast_next_opcode:
   	
 ```
 
-The `FAST_DISPATCH()` is used for some opcode when it's undesirable to suspend the evaluation loop after executing that opcode. Otherwise, the implementation is very straightforward.
+The `FAST_DISPATCH()` macro is used for some opcode when it's undesirable to suspend the evaluation loop after executing that opcode. Otherwise, the implementation is very straightforward.
 
-If the compiler supports "labels as values" extension, we can use the unary `&&` operator on a label to get its address. It has a value of type `void *`, which we can store in a pointer:
+If the compiler supports "labels as values" extension, we can use the unary `&&` operator on a label to get its address. It has a value of type `void *`, so we can store it in a pointer:
 
 ```C
-void *ptr;
-// ...
-ptr = &&my_label;
+void *ptr = &&my_label;
 ```
 
 We can then go to the label by dereferencing the pointer:
@@ -319,7 +317,7 @@ fast_next_opcode:
 }
 ```
 
-The extension is supported by the GCC and Clang compilers. So, when you run `python`, you probably have the optimization enabled. The question is how it affects the performance. Here, I'll rely on the comment from the source code:
+The extension is supported by the GCC and Clang compilers. So, when you run `python`, you probably have the optimization enabled. The question, of course, is how it affects the performance. Here, I'll rely on the comment from the source code:
 
 > At the time of this writing, the "threaded code" version is up to 15-20% faster than the normal "switch" version, depending on the compiler and the CPU architecture.
 
@@ -333,11 +331,11 @@ The most important and, fortunately, very simple fact about the CPython VM is th
 * The `GET_ITER` opcode pops value from the stack, calls `iter()` on it and pushes the result.
 * The `BINARY_ADD` opcode pops value from the stack, peeks another value from the top, adds the first value to the second and replaces the top value with the result.
 
-The value stack resides in a frame object. It's implemented as a part of the array called `f_localsplus`. The array is splitted into several parts to store different things, but, for now, we're interested only in the last part that is used for the value stack. The `f_valuestack` field of a frame object points to the start of the stack. To locate the top of the stack, CPython keeps the `stack_pointer` local variable, which points to the next slot after the top of the stack. The elements of the `f_localsplus` array are pointers to Python objects, and pointers to Python objects is what the CPython VM actually works with.
+The value stack resides in a frame object. It's implemented as a part of the array called `f_localsplus`. The array is split into several parts to store different things, but only the last part is used for the value stack. The start of this part is the bottom of the stack. The `f_valuestack` field of a frame object points to it. To locate the top of the stack, CPython keeps the `stack_pointer` local variable, which points to the next slot after the top of the stack. The elements of the `f_localsplus` array are pointers to Python objects, and pointers to Python objects is what the CPython VM actually works with.
 
 ### Error handling and block stack
 
-Not all computations performed by the VM are successful. Suppose we try to add a string to a number like `1 + '41'`. The compiler produces the `BINARY_ADD` opcode to add two objects. When the VM executes this opcode, it calls `PyNumber_Add()` to calculate the result:
+Not all computations performed by the VM are successful. Suppose we try to add a number to a string like `1 + '41'`. The compiler produces the `BINARY_ADD` opcode to add two objects. When the VM executes this opcode, it calls `PyNumber_Add()` to calculate the result:
 
 ```C
 case TARGET(BINARY_ADD): {
@@ -384,7 +382,7 @@ Traceback (most recent call last):
 TypeError: unsupported operand type(s) for +: 'int' and 'str'
 ```
 
-How can the VM continue the execution after the error has occured? Let's look at the bytecode produced by the compiler for the `try-finally` statement:
+How can the VM continue the execution after the error has occurred? Let's look at the bytecode produced by the compiler for the `try-finally` statement:
 
 ```
 $ python -m dis try-finally.py
@@ -411,7 +409,7 @@ $ python -m dis try-finally.py
              34 RETURN_VALUE
 ```
 
-Note the `SETUP_FINALLY` and `POP_BLOCK` opcodes. The first one sets up the exception handler and the second one removes it. If an error occurs while the VM executes the instructions between them, the execution continues with the instruction at offset 22, which is the start of the `finally` clause. Otherwise, the `finally` clause is executed after the `try` clause. In both cases, the bytecode for the `finally` clause is almost identical. The only difference is that the handler reraises the exception set in the `try` clause.
+Note the `SETUP_FINALLY` and `POP_BLOCK` opcodes. The first one sets up the exception handler and the second one removes it. If an error occurs while the VM executes the instructions between them, the execution continues with the instruction at offset 22, which is the start of the `finally` clause. Otherwise, the `finally` clause is executed after the `try` clause. In both cases, the bytecode for the `finally` clause is almost identical. The only difference is that the handler re-raises the exception set in the `try` clause.
 
 An exception handler is implemented as a simple C struct called block:
 
@@ -445,7 +443,7 @@ Traceback (most recent call last):
 ZeroDivisionError: division by zero
 ```
 
-As expected, CPython prints the original exception. To implement such behavior, when CPython handles an exception using a `SETUP_FINALLY` block, it sets up another block of type `EXCEPT_HANDLER`. If an error occurs when a block of this type is on the block stack, the VM gets the original exception from the value stack and sets it as the current one.
+As expected, CPython prints the original exception. To implement such behavior, when CPython handles an exception using a `SETUP_FINALLY` block, it sets up another block of type `EXCEPT_HANDLER`. If an error occurs when a block of this type is on the block stack, the VM gets the original exception from the value stack and sets it as the current one. CPython used to have different kinds of blocks but now it's only `SETUP_FINALLY` and `EXCEPT_HANDLER`.
 
 The block stack is implemented as the `f_blockstack` array in a frame object. The size of the array is statically defined to 20. So, if you nest more than 20 `try` clauses, you get `SyntaxError: too many statically nested blocks`.
 
@@ -460,3 +458,6 @@ We've also looked at two data structures crucial for the bytecode execution:
 
 The most important conclusion from the post is this: if you want to study the implementation of some aspect of Python, the evaluation loop is a perfect place to start. Want to know what happens when you write `x + y`? Take a look at the code for the `BINARY_ADD` opcode. Want to know how the `with` statement is implemented? See `SETUP_WITH`. Interested in the exact semantics of a function call? The `CALL_FUNCTION` opcode is what you're looking for. We'll apply this method next time when study how variables are implemented in CPython.
 
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
