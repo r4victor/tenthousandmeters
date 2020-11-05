@@ -1886,7 +1886,7 @@ By default, `interp->eval_frame()` is set to `_PyEval_EvalFrameDefault()`. This 
 
 ### Conclusion
 
-We've discussed a lot today. We started by making an overview of the CPython project, compiled CPython and stepped through its source code, studying the initialization stage along the way. Overall, I think this should give you a descent understanding of what CPython does before it starts interpreting the bytecode. What happens after is the subject of the next post.
+We've discussed a lot today. We started by making an overview of the CPython project, compiled CPython and stepped through its source code, studying the initialization stage along the way. Overall, I think this should give you a descent understanding of what CPython does before it starts interpreting the bytecode. What happens after is the subject of [the next post]({filename}/blog/python_bts_04.md).
 
 Meanwhile, to solidify what we learned today and to learn more, I really recommend you to find some time to explore the CPython source code on your own. I bet you have many questions after reading this post, so you should have something to look for. Have a good time!
 
