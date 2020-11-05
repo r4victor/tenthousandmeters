@@ -64,7 +64,9 @@ def g(x):
 
 CPython translates the body of the function `g` to the following sequence of bytes: `[124, 0, 100, 1, 23, 0, 83, 0]`. If we run a standard [`dis`](https://docs.python.org/3/library/dis.html) module to disassemble it, here's what we'll get:
 
-```python
+```
+$ python -m dis example1.py
+...
 2           0 LOAD_FAST            0 (x)
             2 LOAD_CONST           1 (3)
             4 BINARY_ADD
@@ -105,6 +107,8 @@ print(f(1))
 What does its bytecode look like? To answer this question, let's analyze what the program does. It defines a function `f`, calls function `f` with `1` as an argument and prints the result of the call. Whatever the function `f` does, it's not a part of the module's bytecode. We can assure ourselves by running a disassembler.
 
 ```
+$ python -m dis example2.py
+
 1           0 LOAD_CONST               0 (<code object f at 0x10bffd1e0, file "example.py", line 1>)
             2 LOAD_CONST               1 ('f')
             4 MAKE_FUNCTION            0
@@ -118,6 +122,7 @@ What does its bytecode look like? To answer this question, let's analyze what th
            18 POP_TOP
            20 LOAD_CONST               3 (None)
            22 RETURN_VALUE
+...
 ```
 
 On line one we define function `f` by making a function from something called code object and binding name `f` to it. We don't see the bytecode of the function `f` that returns an incremented argument.
