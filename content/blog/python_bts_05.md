@@ -188,5 +188,127 @@ None of the opcodes are `LOAD_NAME`. The compiler produces the `LOAD_GLOBAL` opc
 * It uses the `LOAD_FAST` and `STORE_FAST` opcodes for the variables local to a function. They are called `*_FAST`, because the VM uses an array to implement name-value mapping for such variables, which works faster than a dictionary.
 * It uses the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes for the variables global to a function.
 * It uses the `LOAD_DEREF` and `STORE_DEREF` opcodes for the variables bound in a function and used by the nested function. These opcodes are used to implement closures.
-* It uses the `LOAD_NAME` and `STORE_NAME` opcodes for the variables local to a namespace other than a function namespace. These effectively are the variables local to a module or a class.
+* It uses the `LOAD_NAME` and `STORE_NAME` opcodes for the variables local to a namespace other than a function namespace. These effectively are the variables local to a module or a class definition.
+
+What does it mean for a variable to be local to a function? Global? What do we mean by the scope of a variable? We need to answer these questions before we can understand why CPython works with variables in four different ways.
+
+## Namespaces and scopes
+
+CPython keeps track of all variables used within each namepspace. A namespace in Python is just a synonym for a code object in the context of variables. A module, a function and a class define namespaces. The scope of a variable is relative to a namespace. This is why I use phrases such as "local to a function". The following example illustrates the point:
+
+```python
+a = 1
+
+def f():
+    b = 3
+    return a + b
+```
+
+Here, `a` is a global variable to the `f` function, but it's local to the module. The `b` variable is local to the `f` function, but it doesn't exist in the module's namespace at all.
+
+The variable is considered to be local to a namespace if it's bound in that namespace. The assignment statement like `a = 1` binds the name `a` to `1`. The assignment statement, though, is not the only way to bind a name. [The Python Language Reference](https://docs.python.org/3/reference/executionmodel.html#naming-and-binding) lists a few more:
+
+> The following constructs bind names: formal parameters to functions, `import` statements, class and function definitions (these bind the class or function name in the defining block), and targets that are identifiers if occurring in an assignment, `for` loop header, or after as in a `with` statement or `except` clause. The `import` statement of the form `from ... import *` binds all names defined in the imported module, except those beginning with an underscore. This form may only be used at the module level.
+
+Because any binding of a name makes the compiler think that the name is local, the following code raises an exception:
+
+```python
+a = 1
+
+def f():
+    a += 1
+    return a
+
+print(f())
+```
+
+```text
+$ python example3.py
+...
+    a += 1
+UnboundLocalError: local variable 'a' referenced before assignment
+```
+
+The `a += 1` statement is a form of assignment, so the compiler thinks that `a` is local. To perfrom the operation, the VM tries to load the value of `a`, fails and sets the exception. To tell the compiler that `a` is global despite the assignment we can use the `global` statement:
+
+```python
+a = 1
+
+def f():
+    global a
+    a += 1
+    return a
+
+print(f())
+```
+
+```text
+$ python example4.py 
+2
+```
+
+Similarly, we use the `nonlocal` statement to tell the compiler that a name assigned in an enclosed (nested) function corresponds to the namespace of the enclosing function:
+
+```python
+a = 1 # this is not used
+
+def f():
+    a = 2
+    def g():
+        nonlocal a
+        a += 1
+        return a
+
+    return g()
+
+print(f())
+```
+
+```text
+$ python example5.py 
+3
+```
+
+This is the work of the compiler to analyze the usage of names within the namespace, take statements like `global` and `nonlocal` into account and produce the right opcodes to load and store values. Let's see why CPython uses four pairs of load/store opcodes and how the VM executes them.
+
+## LOAD_FAST and STORE_FAST
+
+The compiler produces `LOAD_FAST` and `STORE_FAST` opcodes for variables local to a function. Here's an example:
+
+```python
+def f(x):
+    y = x
+    return y
+```
+
+```
+$ python3 -m dis example6.py
+...
+  2           0 LOAD_FAST                0 (x)
+              2 STORE_FAST               1 (y)
+
+  3           4 LOAD_FAST                1 (y)
+              6 RETURN_VALUE
+```
+
+The `y` variable is local to `f` because it's bound in `f` by the assignment. The `x` variable is local to `f` because it's bound in `f` as its parameter.
+
+Let's look at the code for executing the `STORE_FAST` opcode:
+
+```C
+case TARGET(STORE_FAST): {
+    PREDICTED(STORE_FAST);
+    PyObject *value = POP();
+    SETLOCAL(oparg, value);
+    FAST_DISPATCH();
+}
+```
+
+`SETLOCAL()` is a macro that essentially expands to `fastlocals[oparg] = value`. The `fastlocals` variable is just a shorthand for the `f_localsplus` field of a frame object. The `f_localsplus` field is an array of pointers to Python objects. It stores values of local variables, cell variables, free variables and the value stack. Last time we learned that the `f_localsplus` array is used to store the value stack. In the next sections of this post we'll see how it's used to store values of cell and free variables. For now we're interested in the first part of the array that's used for local variables.
+
+We've seen that in the case of the `STORE_NAME` opcode, the VM first gets the name from `co_names` and then maps that name to the value on top of the stack. It uses `f_locals` as a name-value mapping, which is usually a dictionary. In the case of the `STORE_FAST` opcode, the VM doesn't need to get the name. The number of local variables can be calculated statically by the compiler, so the VM can use an array to store their values. Each local variable corresponds to an index of the array. To map a name to a value, the VM simply stores the value in the corresponding index.
+
+
+
+The `STORE_FAST` opcode exists for performance reasons. Nevertheless, the difference with `STORE_NAME` is significant. 
 
