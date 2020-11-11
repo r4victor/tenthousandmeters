@@ -172,7 +172,7 @@ def f(y, z):
 The `f` function has to load the values of variables `x`, `y` and `z` to add them and return the result. Note which opcodes the compiler produces to do that:
 
 ```
-$ python3 -m dis global_fast_deref.py
+$ python -m dis global_fast_deref.py
 ...
   7          12 LOAD_GLOBAL              0 (x)
              14 LOAD_FAST                0 (y)
@@ -183,14 +183,15 @@ $ python3 -m dis global_fast_deref.py
 ...
 ```
 
-None of the opcodes are `LOAD_NAME`. The compiler produces the `LOAD_GLOBAL` opcode to load the value of `x`, the `LOAD_FAST` opcode to load the value of `y` and the `LOAD_DEREF` opcode to load the value of `z`.  In general, which opcode the compiler produces for a variable depends on the scope of that variable. This is done so that the VM can store and load values of variables with different scopes differently. CPython uses four pairs of load/store opcodes in total:
+None of the opcodes are `LOAD_NAME`. The compiler produces the `LOAD_GLOBAL` opcode to load the value of `x`, the `LOAD_FAST` opcode to load the value of `y` and the `LOAD_DEREF` opcode to load the value of `z`.  In general, which opcode the compiler produces for a variable depends on the scope of that variable. This is done so that the VM can store and load values of variables with different scopes differently. CPython uses four pairs of load/store opcodes in total and one more load opcode for the very special case:
 
 * It uses the `LOAD_FAST` and `STORE_FAST` opcodes for the variables local to a function. They are called `*_FAST`, because the VM uses an array to implement name-value mapping for such variables, which works faster than a dictionary.
 * It uses the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes for the variables global to a function.
 * It uses the `LOAD_DEREF` and `STORE_DEREF` opcodes for the variables bound in a function and used by the nested function. These opcodes are used to implement [closures](https://en.wikipedia.org/wiki/Closure_(computer_programming)).
-* It uses the `LOAD_NAME` and `STORE_NAME` opcodes for the variables local to a namespace other than a function namespace. These effectively are the variables local to a module or a class definition.
+* It uses the `LOAD_NAME` and `STORE_NAME` opcodes for other variables. These effectively are the variables of a module or a class definition.
+* It uses the `LOAD_CLASSDEREF` opcode for variables of a class definition nested in a function and not bound in the class definition but bound in the function.
 
-What does it mean for a variable to be local to a function? Global? What do we mean by the scope of a variable? We need to answer these questions before we can understand why CPython works with variables in four different ways.
+Whoa! What does it mean for a variable to be local to a function? Global to a function? What do we mean by the scope of a variable at all? We need to answer these questions before we can understand why CPython works with variables in multiple ways.
 
 ## Namespaces and scopes
 
@@ -282,7 +283,7 @@ def f(x):
 ```
 
 ```
-$ python3 -m dis example6.py
+$ python -m dis example6.py
 ...
   2           0 LOAD_FAST                0 (x)
               2 STORE_FAST               1 (y)
@@ -393,7 +394,7 @@ def f():
 ```
 
 ```
-$ python3 -m dis nested.py
+$ python -m dis nested.py
 ...
 Disassembly of <code object f at 0x1027c72f0, file "nested.py", line 1>:
   2           0 LOAD_CONST               1 (1)
@@ -557,7 +558,7 @@ case TARGET(STORE_GLOBAL): {
 The `f_globals` field of a frame object is a dictionary that maps global names to their values. When CPython creates a frame object for a module, it assigns `f_globals` to the dictionary of the module. We can easily check this:
 
 ```text
-$ python3 -q
+$ python -q
 >>> import sys
 >>> globals() is sys.modules['__main__'].__dict__
 True
@@ -592,4 +593,62 @@ The `ptr` field of the `_PyOpcache_LoadGlobal` struct points to the actual resul
 If the VM finds a value in a cache when it executes `LOAD_GLOBAL`, it makes sure that the `f_global` and `f_builtins` dictionaries haven't been modified since the last time the value was looked up. This is done by comparing `globals_ver` and `builtins_ver` with `ma_version_tag` of the dictionaries. The `ma_version_tag` field of a dictionary changes each time the dictionary is modified. See [PEP 509](https://www.python.org/dev/peps/pep-0509/) for more details.
 
 If the VM doesn't find a value in a cache, it does a normal look up first in `f_globals` and then in `f_builtins`. If it finds the value, it remembers the current values of `ma_version_tag` of both dictionaries and pushes the value on the stack.
+
+## LOAD_NAME and STORE_NAME (and LOAD_CLASSDEREF)
+
+At this point you might wonder why CPython uses the `LOAD_NAME` and `STORE_NAME` opcodes at all. The compiler indeed doesn't produce these opcodes when it compiles functions, but a function is only one kind of code block. CPython distinguishes three kinds of code blocks in total:
+
+* modules
+* functions (comprehensions and lambdas are also functions)
+* class definitions.
+
+We haven't talked about class definitions, so let's fix it. The compiler creates a code object for each code block in a program. The VM executes the module's code object when we run or import the module. It executes the function's code object when we call the function. And it executes the code object of a class definition when we create the class. Here's what I mean:
+
+```python
+class A:
+    print('This code is executed')
+```
+
+```text
+$ python create_class.py 
+This code is executed
+```
+
+The compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for all variables within a class definition (with one exception). Because of this, the variables within a class definition work differently than the variables within a function:
+
+```python
+x = 'global'
+
+class C:
+    print(x)
+    x = 'local'
+    print(x)
+```
+
+```text
+$ python class_local.py
+global
+local
+```
+
+On the first load, the VM gets the value of the `x` variable from `f_globals`. Then, it stores the new value in `f_locals` and, on the second load, gets it from there. If `C` was a function,  we would get `UnboundLocalError: local variable 'x' referenced before assignment ` when we call it, because the compiler would think that the `x` variable is local to `C`.
+
+When we place a function inside a class, which is a common practice to implement methods, the function doesn't see the names bound in the class' namespace:
+
+```python
+class D:
+    x = 1
+    def method(self):
+        print(x)
+
+D().method()
+```
+
+```text
+$ python func_in_class.py
+...
+NameError: name 'x' is not defined
+```
+
+This is because the VM stores the value of `x`  with `STORE_NAME` when it executes the class definition and tries to load it with `LOAD_GLOBAL` when it executes the function.
 
