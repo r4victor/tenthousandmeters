@@ -187,7 +187,7 @@ None of the opcodes are `LOAD_NAME`. The compiler produces the `LOAD_GLOBAL` opc
 
 * It uses the `LOAD_FAST` and `STORE_FAST` opcodes for the variables local to a function. They are called `*_FAST`, because the VM uses an array to implement name-value mapping for such variables, which works faster than a dictionary.
 * It uses the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes for the variables global to a function.
-* It uses the `LOAD_DEREF` and `STORE_DEREF` opcodes for the variables bound in a function and used by the nested function. These opcodes are used to implement closures.
+* It uses the `LOAD_DEREF` and `STORE_DEREF` opcodes for the variables bound in a function and used by the nested function. These opcodes are used to implement [closures](https://en.wikipedia.org/wiki/Closure_(computer_programming)).
 * It uses the `LOAD_NAME` and `STORE_NAME` opcodes for the variables local to a namespace other than a function namespace. These effectively are the variables local to a module or a class definition.
 
 What does it mean for a variable to be local to a function? Global? What do we mean by the scope of a variable? We need to answer these questions before we can understand why CPython works with variables in four different ways.
@@ -308,7 +308,288 @@ case TARGET(STORE_FAST): {
 
 We've seen that in the case of the `STORE_NAME` opcode, the VM first gets the name from `co_names` and then maps that name to the value on top of the stack. It uses `f_locals` as a name-value mapping, which is usually a dictionary. In the case of the `STORE_FAST` opcode, the VM doesn't need to get the name. The number of local variables can be calculated statically by the compiler, so the VM can use an array to store their values. Each local variable corresponds to an index of the array. To map a name to a value, the VM simply stores the value in the corresponding index.
 
+The VM doesn't need to get the names of local variables to load and store their values. Nevertheless, it stores the names of local variables in the `co_varnames` tuple in a code object. Names are necessary for debugging and error messages. They are also used by the tools such as `dis` that reads  `co_varnames` to display names in parentheses:
+
+```text
+              2 STORE_FAST               1 (y)
+```
+
+CPython provides the `local()` built-in function that returns the name-value mapping of the current namepace in the form of a dictionary. The VM doesn't keep such a dictionary for functions but it can built one on the fly by mapping keys from `co_varnames` to values from `f_localsplus`.
+
+The `LOAD_FAST` opcode simply pushes `f_localsplus[oparg]` on the stack:
+
+```C
+case TARGET(LOAD_FAST): {
+    PyObject *value = GETLOCAL(oparg);
+    if (value == NULL) {
+        format_exc_check_arg(tstate, PyExc_UnboundLocalError,
+                             UNBOUNDLOCAL_ERROR_MSG,
+                             PyTuple_GetItem(co->co_varnames, oparg));
+        goto error;
+    }
+    Py_INCREF(value);
+    PUSH(value);
+    FAST_DISPATCH();
+}
+```
+
+The `LOAD_FAST` and  `STORE_FAST` opcodes exist for performance reasons only. What's the speed gain? Let's measure the difference between `STORE_FAST` and `STORE_NAME`. The following piece of code stores the value of variable `i` 100 million times:
+
+```python
+for i in range(10**8):
+		pass
+```
+
+If we place it in a module, the compiler produces the `STORE_NAME` opcode. If we place it in a function, the compiler produces the `STORE_FAST` opcode. Let's do both and compare the running times:
+
+```python
+import time
 
 
-The `STORE_FAST` opcode exists for performance reasons. Nevertheless, the difference with `STORE_NAME` is significant. 
+times = []
+for _ in range(5):
+    start = time.time()
+    for i in range(10**8):
+        pass
+    times.append(time.time() - start)
+
+print('STORE_NAME: ' + ' '.join(f'{elapsed:.3f}s' for elapsed in sorted(times)))
+
+
+def f():
+    times = []
+    for _ in range(5):
+        start = time.time()
+        for i in range(10**8):
+            pass
+        times.append(time.time() - start)
+
+    print('STORE_FAST: ' + ' '.join(f'{elapsed:.3f}s' for elapsed in sorted(times)))
+
+
+f()
+```
+
+```text
+$ python fast_vs_name.py
+STORE_NAME: 4.536s 4.572s 4.650s 4.742s 4.855s
+STORE_FAST: 2.597s 2.608s 2.625s 2.628s 2.645s
+```
+
+Another difference in implementation of `STORE_NAME` and `STORE_FAST` could affect the results. The case block for the `STORE_FAST` opcode ends with the `FAST_DISPATCH()` macro, which means that the VM goes to the next instruction straight away after it executes the `STORE_FAST` instruction. The case block for the `STORE_NAME` opcode ends with the `DISPATCH()` macro, which means that the VM may possible go to the start of the evaluation loop. At the start of the evaluation loop the VM checks whether it has to suspend the bytecode execution, for example, to release the GIL or to handle signals. I've replaced the `DISPATCH()` macro with `FAST_DISPATCH()` in the case block for `STORE_NAME`, recompiled CPyhon and got similar results. So, the difference in times should indeed be explained by:
+
+* the extra step to get a name; and
+* the fact that a dictionary is slower than an array.
+
+## LOAD_DEREF and STORE_DEREF
+
+There is one case when the compiler doesn't produce the `LOAD_FAST` and `STORE_FAST` opcodes for variables local to a function. This happens when a variable is used within a nested function. 
+
+```python
+def f():
+    b = 1
+    def g():
+        return b
+```
+
+```
+$ python3 -m dis nested.py
+...
+Disassembly of <code object f at 0x1027c72f0, file "nested.py", line 1>:
+  2           0 LOAD_CONST               1 (1)
+              2 STORE_DEREF              0 (b)
+
+  3           4 LOAD_CLOSURE             0 (b)
+              6 BUILD_TUPLE              1
+              8 LOAD_CONST               2 (<code object g at 0x1027c7240, file "nested.py", line 3>)
+             10 LOAD_CONST               3 ('f.<locals>.g')
+             12 MAKE_FUNCTION            8 (closure)
+             14 STORE_FAST               0 (g)
+             16 LOAD_CONST               0 (None)
+             18 RETURN_VALUE
+
+Disassembly of <code object g at 0x1027c7240, file "nested.py", line 3>:
+  4           0 LOAD_DEREF               0 (b)
+              2 RETURN_VALUE
+```
+
+The compiler produces the `LOAD_DEREF` and `STORE_DEREF` opcodes for cell and free variables. A cell variable is a local variable used in a nested function. In our example, `b` is a cell variable of the `f` function, because it's used in `g`. A free variable is a cell variable from the perspective of a nested function. It's a variable not bound in a function but bound in the enclosing function or a variable marked `nonlocal`. In our example, `b` is a free variable of the `g` function, because it's not bound in `g` but bound in `f`.
+
+The values of cell and free variables are stored in the `f_localsplus ` array after the values of normal local variables. The only difference is that `f_localsplus[index_of_cell_or_free_var]` points not to the value directly but to a cell object containing the value:
+
+```C
+typedef struct {
+    PyObject_HEAD
+    PyObject *ob_ref;       /* Content of the cell or NULL when empty */
+} PyCellObject;
+```
+
+The `STORE_DEREF` opcode pops the value from the stack, gets the cell of the variable specified by `oparg` and assigns `ob_ref` of that cell to the value:
+
+```C
+case TARGET(STORE_DEREF): {
+    PyObject *v = POP();
+    PyObject *cell = freevars[oparg]; // freevars = f->f_localsplus + co->co_nlocals
+    PyObject *oldobj = PyCell_GET(cell);
+    PyCell_SET(cell, v); // expands to ((PyCellObject *)(cell))->ob_ref = v
+    Py_XDECREF(oldobj);
+    DISPATCH();
+}
+```
+
+Similarly, `LOAD_DEREF` pushes on the stack content of a cell:
+
+```C
+case TARGET(LOAD_DEREF): {
+    PyObject *cell = freevars[oparg];
+    PyObject *value = PyCell_GET(cell);
+    if (value == NULL) {
+      format_exc_unbound(tstate, co, oparg);
+      goto error;
+    }
+    Py_INCREF(value);
+    PUSH(value);
+    DISPATCH();
+}
+```
+
+The value of a cell variable and the corresponding free variable is stored in the same cell. The VM passes the cells of the enclosing function to the enclosed function when it creates the enclosed function. The `LOAD_CLOSURE` opcode pushes a cell on the stack and the `MAKE_FUNCTION` opcode creates a function that uses that cell for the corresponding free variable. Due to the cell mechanism, when the enclosing function reassigns a cell variable, the enclosed function sees the reassignment:
+
+```python
+def f():
+    def g():
+        print(a)
+    a = 'assigned'
+    g()
+    a = 'reassigned'
+    g()
+
+f()
+```
+
+```text
+$ python cell_reassign.py 
+assigned
+reassigned
+```
+
+and vice versa:
+
+```python
+def f():
+    def g():
+        nonlocal a
+        a = 'reassigned'
+    a = 'assigned'
+    print(a)
+    g()
+    print(a)
+
+f()
+```
+
+```text
+$ python free_reassign.py 
+assigned
+reassigned
+```
+
+Do we really need the cell mechanism to implement such behavior? Couldn't we just use the enclosing namespace to load and store the values of free variables? Yes, we could, but consider the following example:
+
+```python
+def get_counter(start=0):
+    def count():
+        nonlocal c
+        c += 1
+        return c
+
+    c = start - 1
+    return count
+
+count = get_counter()
+print(count())
+print(count())
+```
+
+```text
+$ python counter.py 
+0
+1
+```
+
+Recall that when we call a function, CPython creates a frame object to execute it. A frame object captures the state of the code object's execution including the name-value mapping. This example shows that an enclosed function can outlive the frame object of the enclosing function. The benefit of the cell mechasim is that it allows to avoid keeping the frame object of an enclosing function in memory.
+
+## LOAD_GLOBAL and STORE_GLOBAL
+
+The compiler produces the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes for variables global to a function. The variable is considered be global to a function if it's marked `global` or if it's not bound within the function and any enclosing function (i.e. it's neither local nor free). Here's an example:
+
+```python
+a = 1
+d = 1
+
+def f():
+    b = 1
+    def g():
+        global d
+        c = 1
+        d = 1
+        return a + b + c + d
+
+```
+
+The `c` variable is not global to `g` because it's local to `g`. The `b` variable is not global to `g` because it's free. The `a` variables is global to `g` because it's not local nor free. And the `d` variable is global to `g` because it's explicitly marked `global`.
+
+Here's the implementation of the `STORE_GLOBAL` opcode:
+
+```C
+case TARGET(STORE_GLOBAL): {
+    PyObject *name = GETITEM(names, oparg);
+    PyObject *v = POP();
+    int err;
+    err = PyDict_SetItem(f->f_globals, name, v);
+    Py_DECREF(v);
+    if (err != 0)
+      	goto error;
+    DISPATCH();
+}
+```
+
+The `f_globals` field of a frame object is a dictionary that maps global names to their values. When CPython creates a frame object for a module, it assigns `f_globals` to the dictionary of the module. We can easily check this:
+
+```text
+$ python3 -q
+>>> import sys
+>>> globals() is sys.modules['__main__'].__dict__
+True
+```
+
+When the VM executes the `MAKE_FUNCTION` opcode to create a new function object, it assigns the `func_globals` field of that object to the `f_globals` field of the current frame. When the function is called, the VM creates a frame object with `f_globals` set to `func_globals`.
+
+The implementation of `LOAD_GLOBAL` is similiar to that of `LOAD_NAME` with two exceptions:
+
+* It doesn't look up values in `f_locals`.
+* It uses cache to decrease the lookup time.
+
+CPython caches the results in the `co_opcache` field of a code object. This is an array of pointers to the `_PyOpcache` objects:
+
+```C
+typedef struct {
+    PyObject *ptr;  /* Cached pointer (borrowed reference) */
+    uint64_t globals_ver;  /* ma_version of global dict */
+    uint64_t builtins_ver; /* ma_version of builtin dict */
+} _PyOpcache_LoadGlobal;
+
+struct _PyOpcache {
+    union {
+        _PyOpcache_LoadGlobal lg;
+    } u;
+    char optimized;
+};
+```
+
+The `ptr` field of the `_PyOpcache_LoadGlobal` struct points to the actual result of `LOAD_GLOBAL`. The cache is maintained per instruction number. Another array in a code object called `co_opcache_map` maps each intruction in the bytecode to its index minus one in `co_opcache`. If the instruction is not `LOAD_GLOBAL`, it maps the instruction to `0`. The size of the cache doesn't exceed 254. If bytecode contains more than 254 `LOAD_GLOBAL` instructions, `co_opcache_map` maps extra instructions to `0`.
+
+If the VM finds a value in a cache when it executes `LOAD_GLOBAL`, it makes sure that the `f_global` and `f_builtins` dictionaries haven't been modified since the last time the value was looked up. This is done by comparing `globals_ver` and `builtins_ver` with `ma_version_tag` of the dictionaries. The `ma_version_tag` field of a dictionary changes each time the dictionary is modified. See [PEP 509](https://www.python.org/dev/peps/pep-0509/) for more details.
+
+If the VM doesn't find a value in a cache, it does a normal look up first in `f_globals` and then in `f_builtins`. If it finds the value, it remembers the current values of `ma_version_tag` of both dictionaries and pushes the value on the stack.
 
