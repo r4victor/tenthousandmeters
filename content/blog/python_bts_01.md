@@ -290,7 +290,7 @@ Let's make a quick summary of the CPython's architecture to see how everything f
 4. Frame: element of call stack; provides a state to execute a code object.
 5. Evaluation loop: executes a code object, which tells what a code block does and contains bytecode and names of variables.
 
-The layers are represented by the corresponding data structures, which we've already seen. In some cases they are not equivalent, tough. For example, the mechanism of memory allocation is implemented using global variables. It's not a part of the runtime state but certainly a part of CPython runtime layer. 
+The layers are represented by the corresponding data structures, which we've already seen. In some cases they are not equivalent, though. For example, the mechanism of memory allocation is implemented using global variables. It's not a part of the runtime state but certainly a part of CPython runtime layer. 
 
 ### Conclusion
 

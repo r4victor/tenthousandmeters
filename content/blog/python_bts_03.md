@@ -1129,7 +1129,7 @@ _PyTypes_Init(void)
 
 Some built-in types require additional type-specific initialization. For example, the initialization of `int` is needed to preallocate small integers in the  `interp->small_ints` array so that they can be reused, and the initialization of `float` is needed to determine how the current machine represents the floating point number.
 
-When the built-in types are initialized, `pycore_interp_init()` calls  `_PySys_Create()` to create the [`sys`](https://docs.python.org/3/library/sys.html) module. Why is the `sys` module is the first module to be created? Of course, it's very important, since it contains such things as the command line arguments passed to a program (`sys.argv`), the list of path entries to search for modules (`sys.path`), a lot of system-specific and implementation-specific data (`sys.version`, `sys.implementation`, `sys.thread_info`, etc.) and various functions that allow to interact with the interpreter (`sys.addaudithook()`, `sys.settrace()`, etc.). The main reason, tough, to create the `sys` module so early is to initialize `sys.modules`. It points to the `interp->modules` dictionary, which is also created by `_PySys_Create()`, and acts as a cache for all imported modules. It's the first place to look up for a module, and it's the place where all loaded modules are saved to. The import system heavily relies on `sys.modules`.
+When the built-in types are initialized, `pycore_interp_init()` calls  `_PySys_Create()` to create the [`sys`](https://docs.python.org/3/library/sys.html) module. Why is the `sys` module is the first module to be created? Of course, it's very important, since it contains such things as the command line arguments passed to a program (`sys.argv`), the list of path entries to search for modules (`sys.path`), a lot of system-specific and implementation-specific data (`sys.version`, `sys.implementation`, `sys.thread_info`, etc.) and various functions that allow to interact with the interpreter (`sys.addaudithook()`, `sys.settrace()`, etc.). The main reason, though, to create the `sys` module so early is to initialize `sys.modules`. It points to the `interp->modules` dictionary, which is also created by `_PySys_Create()`, and acts as a cache for all imported modules. It's the first place to look up for a module, and it's the place where all loaded modules are saved to. The import system heavily relies on `sys.modules`.
 
 After the call to`_PySys_Create()`, the `sys` module is only partially initialized. The functions and most of the variables are available, but invocation-specific data, such as `sys.argv` and `sys._xoptions`, and the path-related configuration, such as `sys.path` and `sys.exec_prefix`, will be set during the main initialization phase.
 
@@ -1143,7 +1143,7 @@ $ ./python.exe -q
 <stdin>:1: DeprecationWarning: the imp module is deprecated in favour of importlib; ...
 ```
 
-Warnings can be ignored, turned into exceptions and displayed in various ways. CPython has filters to do that. Some filters are turned on by default, and the `pycore_init_import_warnings()` function is what turns them on. Most crucially, tough, is that `pycore_init_import_warnings()` sets up the import system for built-in and frozen modules.
+Warnings can be ignored, turned into exceptions and displayed in various ways. CPython has filters to do that. Some filters are turned on by default, and the `pycore_init_import_warnings()` function is what turns them on. Most crucially, though, is that `pycore_init_import_warnings()` sets up the import system for built-in and frozen modules.
 
 The built-in and frozen modules are two special kinds of modules. What unites them is that they are compiled directly into the `python` executable. The difference is that built-in modules are written in C, while frozen modules are written in Python. How is that possible to compile a module written in Python into the executable? This is cleverly done by incorporating the binary representation of a module's code object into the C source code. To generate the binary representation, the [Freeze](https://github.com/python/cpython/tree/master/Tools/freeze) utility is used. 
 
@@ -1882,7 +1882,7 @@ fail: /* Jump here from prelude on failure */
 
 `_PyEval_EvalFrame()` is a wrapper around `interp->eval_frame()`, which is the frame evaluation function. It's possible to set  `interp->eval_frame()` to a custom function. Why would someone want to do that? For example, it allows to add a JIT compiler to CPython by replacing the default evaluation function with the one that stores compiled machine code in a code object and runs it. [PEP 523](https://www.python.org/dev/peps/pep-0523/) introduced this functionality in CPython 3.6.
 
-By default, `interp->eval_frame()` is set to `_PyEval_EvalFrameDefault()`. This function, defined in `Python/ceval.c`, consists of almost 3,000 lines. Today, tough, we're only interested in one. Line 1336 of `Python/ceval.c` begins what we've been waiting for so long: the evaluation loop.
+By default, `interp->eval_frame()` is set to `_PyEval_EvalFrameDefault()`. This function, defined in `Python/ceval.c`, consists of almost 3,000 lines. Today, though, we're only interested in one. Line 1336 of `Python/ceval.c` begins what we've been waiting for so long: the evaluation loop.
 
 ### Conclusion
 

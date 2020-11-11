@@ -195,7 +195,7 @@ After executing any given instruction, the VM does one of the three things:
 
 * It returns from the evaluation function. This happens when the VM executes `RETURN_VALUE`, `YIELD_VALUE` or `YIELD_FROM` instruction.
 * It handles the error and either continues the execution or returns from the evaluation function with the exception set. The error can occur when, for example, the VM executes the `BINARY_ADD` instruction and the objects to be added do not implement `__add__` and `__radd__` methods.
-* It continues the execution. How to make the VM execute the next instruction? The simplest solution would be to end each non-returning `case` block with the `continue` statement. The real solution, tough, is a little bit more complicated.
+* It continues the execution. How to make the VM execute the next instruction? The simplest solution would be to end each non-returning `case` block with the `continue` statement. The real solution, though, is a little bit more complicated.
 
 To see the problem with the simple  `continue  ` statement, we need to understand what `switch` compiles to. An opcode is an integer between 0 and 255. Because the range is dense, the compiler can create a jump table that stores addresses of the `case` blocks and use opcodes as indices into that table. The modern compilers indeed do that, so the dispatching of cases is effectively implemented as a single indirect jump. This is an efficient way to implement `switch`. However, placing `switch` inside the loop and adding `continue` statements creates two inefficiencies:
 
