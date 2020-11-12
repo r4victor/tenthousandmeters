@@ -694,3 +694,26 @@ print(f())
 
 So, to run a module, CPython compiles it as it would be compiled with `compile()`, which is an understandable design choice.
 
+## How the compiler decides which opcode to produce
+
+We learned in part 2 of this series that before the compiler creates a code object for a code block, it builds a symbol table for that block. A symbol table contains information about symbols (i.e. names) used within the block including their scopes. The compiler decides which load/store opcode to produce for a given name based on its scope and the type of the current code block. The algorithm can be summarized as follows:
+
+1. Determine the scope of a variable:
+    1. If the variable marked `global`, it's an explicit global variable.
+    2. If the variable marked `nonlocal`, it's a free variable.
+    3. If the variable is bound within the current code block, it's a local variable.
+    4. If the variable is bound in the enclosing code block that is not a class definition, it's a free variable.
+    5. Otherwise, it's a implicit global variable.
+
+2. If the variable is local and and it's free in the enclosed code block, treat it as a cell variable.
+
+3. Decide which opcode to produce:
+    1. If the variable is a cell variable or a free variable, produce `*_DEREF` opcode; produce the `LOAD_CLASSDEREF` opcode to load the value if the current code block is a class definition.
+    2. If the variable is a local variable and the current code block is a function, produce `*_FAST` opcode.
+    3. If the variable is an explicit global variable or if it's an implicit global variable and the current code block is a function, produce `*_GLOBAL` opcode.
+    4. Otherwise, produce `*_NAME` opcode.
+
+You don't need to remember these rules. You can always read the source code. Check out [`Python/symtable.c`](https://github.com/python/cpython/blob/3.9/Python/symtable.c#L497) to see how the compiler determines the scope of a variable and [`Python/compile.c`](https://github.com/python/cpython/blob/3.9/Python/compile.c#L3550) to see how it decides which opcode to produce.
+
+## Conclusion
+
