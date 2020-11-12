@@ -614,7 +614,7 @@ $ python create_class.py
 This code is executed
 ```
 
-The compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for all variables within a class definition (with one exception). Because of this, the variables within a class definition work differently than the variables within a function:
+The compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for all variables within a class definition (with the exception of free variables). Because of this, the variables within a class definition work differently than the variables within a function:
 
 ```python
 x = 'global'
@@ -650,5 +650,47 @@ $ python func_in_class.py
 NameError: name 'x' is not defined
 ```
 
-This is because the VM stores the value of `x`  with `STORE_NAME` when it executes the class definition and tries to load it with `LOAD_GLOBAL` when it executes the function.
+This is because the VM stores the value of `x`  with `STORE_NAME` when it executes the class definition and tries to load it with `LOAD_GLOBAL` when it executes the function. However, when we place a class definition inside a function, the cell mechanism works as if we place a function inside a function:
+
+```python
+def f():
+    x = "I'm a cell variable"
+    class B:
+        print(x)
+
+f()
+```
+
+```text
+$ python class_in_func.py 
+I'm a cell variable
+```
+
+There's a difference, though. The compiler produces the `LOAD_CLASSDEREF` opcode instead of `LOAD_DEREF` to load the value of `x`. The documentation of the `dis` module explains what `LOAD_CLASSDEREF` does:
+
+> Much like [`LOAD_DEREF`](https://docs.python.org/3/library/dis.html#opcode-LOAD_DEREF) but first checks the locals dictionary before consulting the cell. This is used for loading free variables in class bodies.
+
+Why does it check the locals dictionary first? In the case of a function, the compiler knows for sure if a variable is local or not. In the case of a class, the compiler cannot be sure. This is because CPython has metaclasses, and a metaclass may prepare a non-empty locals dictionary for a class by implementing the [`__prepare__`](https://docs.python.org/3/reference/datamodel.html#preparing-the-class-namespace) method.
+
+We can see now why the compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for class definitions but we also saw that it produces these opcodes for variables within the module's namespace, as in the `a = b` example. They work as expected because module's `f_locals` and module's `f_globals` is the same things:
+
+```text
+$ python -q
+>>> locals() is globals()
+True
+```
+
+You might wonder why CPython doesn't use the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes in this case. Honestly, I don't know the exact reason, if there is any, but I have a guess. CPython provides the built-in [`compile()`](https://docs.python.org/3/library/functions.html#compile), [`eval()`](https://docs.python.org/3/library/functions.html#eval) and [`exec()`](https://docs.python.org/3/library/functions.html#exec) functions that can be used to dynamically compile and execute Python code. These functions use the `LOAD_NAME` and `STORE_NAME` opcodes within the top-level namespace. It makes perfect sense because it allows to execute code dynamically in a function and get the same effect as if that code was written there:
+
+```python
+a = 1
+
+def f():
+    b = 2
+    return eval('a + b', globals(), locals())
+
+print(f())
+```
+
+So, to run a module, CPython compiles it as it would be compiled with `compile()`, which is an understandable design choice.
 
