@@ -187,16 +187,6 @@ $ python -m dis global_fast_deref.py
 
 None of the opcodes are `LOAD_NAME`. The compiler produces the `LOAD_GLOBAL` opcode to load the value of `x`, the `LOAD_FAST` opcode to load the value of `y` and the `LOAD_DEREF` opcode to load the value of `z`.  To see why the compiler produces different opcodes, we need to discuss two important concepts: namespaces and scopes.
 
-In general, which opcode the compiler produces for a variable depends on the scope of that variable. This is done so that the VM can store and load values of variables with different scopes differently. CPython uses four pairs of load/store opcodes in total and one more load opcode for the very special case:
-
-* It uses the `LOAD_FAST` and `STORE_FAST` opcodes for the variables local to a function. They are called `*_FAST`, because the VM uses an array to implement the name-value mapping for such variables, which works faster than a dictionary.
-* It uses the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes for the variables global to a function.
-* It uses the `LOAD_DEREF` and `STORE_DEREF` opcodes for the variables bound in a function and used by the nested function. These opcodes are used to implement [closures](https://en.wikipedia.org/wiki/Closure_(computer_programming)).
-* It uses the `LOAD_NAME` and `STORE_NAME` opcodes for other variables. These effectively are the variables of a module or a class definition.
-* It uses the `LOAD_CLASSDEREF` opcode for variables of a class definition nested in a function and not bound in the class definition but bound in the function.
-
-Whoa! What does it mean for a variable to be local to a function? Global to a function? What do we mean by the scope of a variable at all? We need to answer these questions before we can understand why CPython works with variables in multiple ways.
-
 ## Namespaces and scopes
 
 A Python program cosists of code blocks. A code block is a piece of code that the VM executes as a single unit. CPython distingushes three types of code blocks:
@@ -205,7 +195,7 @@ A Python program cosists of code blocks. A code block is a piece of code that th
 * function (comprehensions and lambdas are also functions)
 * class definition.
 
-The compiler creates a code object for every code block in a program. A code object is a structure that describes what a code block does. In particular, it contains the bytecode of a block. To execute a code object, CPython creates a state of execution for it called a frame object. Besides other things, a frame object contains name-value mappings such as `f_locals`, `f_globals` and `f_builtins`. These mappings are referred to as namespaces. Each code block introduces a namespace: its local namespace. Several variables in a program may be represented by the same name because that name may refer to different namespaces:
+The compiler creates a code object for every code block in a program. A code object is a structure that describes what a code block does. In particular, it contains the bytecode of a block. To execute a code object, CPython creates a state of execution for it called a frame object. Besides other things, a frame object contains name-value mappings such as `f_locals`, `f_globals` and `f_builtins`. These mappings are referred to as namespaces. Each code block introduces a namespace: its local namespace. The same name in a program may refer to different variables in different namespaces:
 
 ```python
 x = y = "I'm a variable in a global namespace"
@@ -232,7 +222,7 @@ Another important notion is the notion of a scope. Here's what the Python docume
 
 > A *scope* is a textual region of a Python program where a namespace is directly accessible. “Directly accessible” here means that an unqualified reference to a name attempts to find the name in the namespace.
 
-We can think about a scope as a property of a name that tells where the value of that name is stored. The example of a scope is a local scope. The scope of a name is relative to a code block. This is why I use phrases such as "local to a function". The following example illustrates the point:
+We can think about a scope as a property of a name that tells where the value of that name is stored. The example of a scope is a local scope. The scope of a name is relative to a code block. The following example illustrates the point:
 
 ```python
 a = 1
@@ -285,7 +275,7 @@ $ python global_stmt.py
 2
 ```
 
-Similarly, we use the `nonlocal` statement to tell the compiler that a name bound in an enclosed (nested) function refers to a variable in an enclosing function:
+Similarly, we can use the `nonlocal` statement to tell the compiler that a name bound in an enclosed (nested) function refers to a variable in an enclosing function:
 
 ```python
 a = "I'm not used"
@@ -306,7 +296,7 @@ $ python nonlocal_stmt.py
 3
 ```
 
-This is the work of the compiler to analyze the usage of names within the code block, take statements like `global` and `nonlocal` into account and produce the right opcodes to load and store values. In general, which opcode the compiler produces for a name depends on the scope of that name and on the type of the code block that is currently being compiled. The VM executes different opcodes differently. All of that is done to make Python variables work the way they do.
+This is the work of the compiler to analyze the usage of names within a code block, take statements like `global` and `nonlocal` into account and produce the right opcodes to load and store values. In general, which opcode the compiler produces for a name depends on the scope of that name and on the type of the code block that is currently being compiled. The VM executes different opcodes differently. All of that is done to make Python variables work the way they do.
 
 CPython uses four pairs of load/store opcodes and one more load opcode in total:
 
@@ -316,7 +306,7 @@ CPython uses four pairs of load/store opcodes and one more load opcode in total:
 * `LOAD_NAME` and `STORE_NAME`; and
 * `LOAD_CLASSDEREF`.
 
-?? Let's see why CPython uses four pairs of load/store opcodes and how the VM executes them.
+Let's figure out when the compiler produces them, what they do and why CPython needs all of them.
 
 ## LOAD_FAST and STORE_FAST
 
@@ -384,7 +374,7 @@ The `LOAD_FAST` and  `STORE_FAST` opcodes exist only for performance reasons. Th
 
 ```python
 for i in range(10**8):
-		pass
+    pass
 ```
 
 If we place it in a module, the compiler produces the `STORE_NAME` opcode. If we place it in a function, the compiler produces the `STORE_FAST` opcode. Let's do both and compare the running times:
@@ -393,6 +383,7 @@ If we place it in a module, the compiler produces the `STORE_NAME` opcode. If we
 import time
 
 
+# measure STORE_NAME
 times = []
 for _ in range(5):
     start = time.time()
@@ -403,6 +394,7 @@ for _ in range(5):
 print('STORE_NAME: ' + ' '.join(f'{elapsed:.3f}s' for elapsed in sorted(times)))
 
 
+# measure STORE_FAST
 def f():
     times = []
     for _ in range(5):
@@ -413,7 +405,6 @@ def f():
 
     print('STORE_FAST: ' + ' '.join(f'{elapsed:.3f}s' for elapsed in sorted(times)))
 
-
 f()
 ```
 
@@ -423,7 +414,7 @@ STORE_NAME: 4.536s 4.572s 4.650s 4.742s 4.855s
 STORE_FAST: 2.597s 2.608s 2.625s 2.628s 2.645s
 ```
 
-Another difference in the implementation of `STORE_NAME` and `STORE_FAST` could theoretically affect the results. The case block for the `STORE_FAST` opcode ends with the `FAST_DISPATCH()` macro, which means that the VM goes to the next instruction straight away after it executes the `STORE_FAST` instruction. The case block for the `STORE_NAME` opcode ends with the `DISPATCH()` macro, which means that the VM may possible go to the start of the evaluation loop. At the start of the evaluation loop the VM checks whether it has to suspend the bytecode execution, for example, to release the GIL or to handle the signals. I've replaced the `DISPATCH()` macro with `FAST_DISPATCH()` in the case block for `STORE_NAME`, recompiled CPyhon and got similar results. So, the difference in times should indeed be explained by:
+Another difference in the implementation of `STORE_NAME` and `STORE_FAST` could theoretically affect these results. The case block for the `STORE_FAST` opcode ends with the `FAST_DISPATCH()` macro, which means that the VM goes to the next instruction straight away after it executes the `STORE_FAST` instruction. The case block for the `STORE_NAME` opcode ends with the `DISPATCH()` macro, which means that the VM may possible go to the start of the evaluation loop. At the start of the evaluation loop the VM checks whether it has to suspend the bytecode execution, for example, to release the GIL or to handle the signals. I've replaced the `DISPATCH()` macro with `FAST_DISPATCH()` in the case block for `STORE_NAME`, recompiled CPython and got similar results. So, the difference in times should indeed be explained by:
 
 * the extra step to get a name; and
 * the fact that a dictionary is slower than an array.
@@ -500,7 +491,7 @@ case TARGET(LOAD_DEREF): {
 }
 ```
 
-What's the reason to store values in cells? This is done to connect a free variable with the corresponding cell variable. Their values are stored in the different namespaces in a different frame objects but in the same cell. The VM passes the cells of an enclosing function to the enclosed function when it creates the enclosed function. The `LOAD_CLOSURE` opcode pushes a cell onto the stack and the `MAKE_FUNCTION` opcode creates a function object with that cell for the corresponding free variable. Due to the cell mechanism, when an enclosing function reassigns a cell variable, the enclosed function sees the reassignment:
+What's the reason to store values in cells? This is done to connect a free variable with the corresponding cell variable. Their values are stored in different namespaces in different frame objects but in the same cell. The VM passes the cells of an enclosing function to the enclosed function when it creates the enclosed function. The `LOAD_CLOSURE` opcode pushes a cell onto the stack and the `MAKE_FUNCTION` opcode creates a function object with that cell for the corresponding free variable. Due to the cell mechanism, when an enclosing function reassigns a cell variable, an enclosed function sees the reassignment:
 
 ```python
 def f():
@@ -610,14 +601,14 @@ $ python -q
 True
 ```
 
-When the VM executes the `MAKE_FUNCTION` opcode to create a new function object, it assigns the `func_globals` field of that object to the `f_globals` field of the current frame. When the function is called, the VM creates a frame object with `f_globals` set to `func_globals`.
+When the VM executes the `MAKE_FUNCTION` opcode to create a new function object, it assigns the `func_globals` field of that object to `f_globals` of the current frame object. When the function gets called, the VM creates a new frame object for it with `f_globals` set to `func_globals`.
 
 The implementation of `LOAD_GLOBAL` is similiar to that of `LOAD_NAME` with two exceptions:
 
 * It doesn't look up values in `f_locals`.
 * It uses cache to decrease the lookup time.
 
-CPython caches the results in the `co_opcache` field of a code object. This is an array of pointers to the `_PyOpcache` objects:
+CPython caches the results in a code object in the `co_opcache` array. This array stores pointers to the `_PyOpcache` structs:
 
 ```C
 typedef struct {
@@ -634,21 +625,17 @@ struct _PyOpcache {
 };
 ```
 
-The `ptr` field of the `_PyOpcache_LoadGlobal` struct points to the actual result of `LOAD_GLOBAL`. The cache is maintained per instruction number. Another array in a code object called `co_opcache_map` maps each intruction in the bytecode to its index minus one in `co_opcache`. If the instruction is not `LOAD_GLOBAL`, it maps the instruction to `0`. The size of the cache doesn't exceed 254. If bytecode contains more than 254 `LOAD_GLOBAL` instructions, `co_opcache_map` maps extra instructions to `0`.
+The `ptr` field of the `_PyOpcache_LoadGlobal` struct points to the actual result of `LOAD_GLOBAL`. The cache is maintained per instruction number. Another array in a code object called `co_opcache_map` maps each instruction in the bytecode to its index minus one in `co_opcache`. If an instruction is not `LOAD_GLOBAL`, it maps the instruction to `0`, which means that the instruction is never cached. The size of the cache doesn't exceed 254. If bytecode contains more than 254 `LOAD_GLOBAL` instructions, `co_opcache_map` maps extra instructions to `0` as well.
 
-If the VM finds a value in a cache when it executes `LOAD_GLOBAL`, it makes sure that the `f_global` and `f_builtins` dictionaries haven't been modified since the last time the value was looked up. This is done by comparing `globals_ver` and `builtins_ver` with `ma_version_tag` of the dictionaries. The `ma_version_tag` field of a dictionary changes each time the dictionary is modified. See [PEP 509](https://www.python.org/dev/peps/pep-0509/) for more details.
+If the VM finds a value in the cache when it executes `LOAD_GLOBAL`, it makes sure that the `f_global` and `f_builtins` dictionaries haven't been modified since the last time the value was looked up. This is done by comparing `globals_ver` and `builtins_ver` with `ma_version_tag` of the dictionaries. The `ma_version_tag` field of a dictionary changes each time the dictionary is modified. See [PEP 509](https://www.python.org/dev/peps/pep-0509/) for more details.
 
-If the VM doesn't find a value in a cache, it does a normal look up first in `f_globals` and then in `f_builtins`. If it finds the value, it remembers the current values of `ma_version_tag` of both dictionaries and pushes the value on the stack.
+If the VM doesn't find a value in the cache, it does a normal look up first in `f_globals` and then in `f_builtins`. If it eventually finds a value, it remembers current `ma_version_tag` of both dictionaries and pushes the value onto the stack.
 
 ## LOAD_NAME and STORE_NAME (and LOAD_CLASSDEREF)
 
-At this point you might wonder why CPython uses the `LOAD_NAME` and `STORE_NAME` opcodes at all. The compiler indeed doesn't produce these opcodes when it compiles functions, but a function is only one kind of code block. CPython distinguishes three kinds of code blocks in total:
+At this point you might wonder why CPython uses the `LOAD_NAME` and `STORE_NAME` opcodes at all. The compiler indeed doesn't produce these opcodes when it compiles functions. However, besides function, CPython has two other types of code blocks: modules and class definitions. We haven't talked about class definitions at all, so let's fix it.
 
-* modules
-* functions (comprehensions and lambdas are also functions)
-* class definitions.
-
-We haven't talked about class definitions, so let's fix it. The compiler creates a code object for each code block in a program. The VM executes the module's code object when we run or import the module. It executes the function's code object when we call the function. And it executes the code object of a class definition when we create the class. Here's what I mean:
+First, it's crucial to understand that when we define a class, the VM executes its body. Here's what I mean:
 
 ```python
 class A:
@@ -660,7 +647,7 @@ $ python create_class.py
 This code is executed
 ```
 
-The compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for all variables within a class definition (with the exception of free variables). Because of this, the variables within a class definition work differently than the variables within a function:
+The compiler creates code objects for class definitions just as it creates code objects for modules and functions. What's interesting is that the compiler always produces the `LOAD_NAME` and `STORE_NAME` opcodes for variables within a class body (with the single exception of free variables). As a result, variables work differently in a class body than they do in a function:
 
 ```python
 x = 'global'
@@ -677,9 +664,9 @@ global
 local
 ```
 
-On the first load, the VM gets the value of the `x` variable from `f_globals`. Then, it stores the new value in `f_locals` and, on the second load, gets it from there. If `C` was a function,  we would get `UnboundLocalError: local variable 'x' referenced before assignment ` when we call it, because the compiler would think that the `x` variable is local to `C`.
+On the first load, the VM loads the value of the `x` variable from `f_globals`. Then, it stores the new value in `f_locals` and, on the second load, loads it from there. If `C` was a function,  we would get `UnboundLocalError: local variable 'x' referenced before assignment ` when we call it, because the compiler would think that the `x` variable is local to `C`.
 
-When we place a function inside a class, which is a common practice to implement methods, the function doesn't see the names bound in the class' namespace:
+How do the namespaces of classes and functions interplay? When we place a function inside a class, which is a common practice to implement methods, the function doesn't see the names bound in the class' namespace:
 
 ```python
 class D:
@@ -712,13 +699,13 @@ $ python class_in_func.py
 I'm a cell variable
 ```
 
-There's a difference, though. The compiler produces the `LOAD_CLASSDEREF` opcode instead of `LOAD_DEREF` to load the value of `x`. The documentation of the `dis` module explains what `LOAD_CLASSDEREF` does:
+There's a difference, though. The compiler produces the `LOAD_CLASSDEREF` opcode instead of `LOAD_DEREF` to load the value of `x`. The documentation of the `dis` module [explains](https://docs.python.org/3/library/dis.html#opcode-LOAD_CLASSDEREF) what `LOAD_CLASSDEREF` does:
 
 > Much like [`LOAD_DEREF`](https://docs.python.org/3/library/dis.html#opcode-LOAD_DEREF) but first checks the locals dictionary before consulting the cell. This is used for loading free variables in class bodies.
 
 Why does it check the locals dictionary first? In the case of a function, the compiler knows for sure if a variable is local or not. In the case of a class, the compiler cannot be sure. This is because CPython has metaclasses, and a metaclass may prepare a non-empty locals dictionary for a class by implementing the [`__prepare__`](https://docs.python.org/3/reference/datamodel.html#preparing-the-class-namespace) method.
 
-We can see now why the compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for class definitions but we also saw that it produces these opcodes for variables within the module's namespace, as in the `a = b` example. They work as expected because module's `f_locals` and module's `f_globals` is the same things:
+We can see now why the compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for class definitions but we also saw that it produces these opcodes for variables within the module's namespace, as in the `a = b` example. They work as expected because module's `f_locals` and module's `f_globals` is the same thing:
 
 ```text
 $ python -q
@@ -726,40 +713,42 @@ $ python -q
 True
 ```
 
-You might wonder why CPython doesn't use the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes in this case. Honestly, I don't know the exact reason, if there is any, but I have a guess. CPython provides the built-in [`compile()`](https://docs.python.org/3/library/functions.html#compile), [`eval()`](https://docs.python.org/3/library/functions.html#eval) and [`exec()`](https://docs.python.org/3/library/functions.html#exec) functions that can be used to dynamically compile and execute Python code. These functions use the `LOAD_NAME` and `STORE_NAME` opcodes within the top-level namespace. It makes perfect sense because it allows to execute code dynamically in a function and get the same effect as if that code was written there:
+You might wonder why CPython doesn't use the `LOAD_GLOBAL` and `STORE_GLOBAL` opcodes in this case. Honestly, I don't know the exact reason, if there is any, but I have a guess. CPython provides the built-in [`compile()`](https://docs.python.org/3/library/functions.html#compile), [`eval()`](https://docs.python.org/3/library/functions.html#eval) and [`exec()`](https://docs.python.org/3/library/functions.html#exec) functions that can be used to dynamically compile and execute Python code. These functions use the `LOAD_NAME` and `STORE_NAME` opcodes within the top-level namespace. It makes perfect sense because it allows to execute code dynamically in a class body and get the same effect as if that code was written there:
 
 ```python
 a = 1
 
-def f():
+class A:
     b = 2
-    return eval('a + b', globals(), locals())
-
-print(f())
+    exec('print(a + b)', globals(), locals())
 ```
 
-So, to run a module, CPython compiles it as it would be compiled with `compile()`, which is an understandable design choice.
+```
+$ python exec.py
+3
+```
+
+CPython chose to always use the `LOAD_NAME` and `STORE_NAME` opcodes for modules. In this way, the bytecode the compiler produces when we run a module in a normal way and when we execute the module with `exec()` is the same.
 
 ## How the compiler decides which opcode to produce
 
-We learned in part 2 of this series that before the compiler creates a code object for a code block, it builds a symbol table for that block. A symbol table contains information about symbols (i.e. names) used within the block including their scopes. The compiler decides which load/store opcode to produce for a given name based on its scope and the type of the current code block. The algorithm can be summarized as follows:
+We learned in [part 2]({filename}/blog/python_bts_02.md) of this series that before the compiler creates a code object for a code block, it builds a symbol table for that block. A symbol table contains information about symbols (i.e. names) used within a code block including their scopes. The compiler decides which load/store opcode to produce for a given name based on its scope and the type of the code block that is currently being compiled. The algorithm can be summarized as follows:
 
-1. Determine the scope of a variable:
-    1. If the variable marked `global`, it's an explicit global variable.
-    2. If the variable marked `nonlocal`, it's a free variable.
+1. Determine the scope of the variable:
+    1. If the variable declared `global`, it's an explicit global variable.
+    2. If the variable declared `nonlocal`, it's a free variable.
     3. If the variable is bound within the current code block, it's a local variable.
     4. If the variable is bound in the enclosing code block that is not a class definition, it's a free variable.
     5. Otherwise, it's a implicit global variable.
-
-2. If the variable is local and and it's free in the enclosed code block, treat it as a cell variable.
-
+2. Update the scope:
+    1. If the variable is local and and it's free in the enclosed code block, it's a cell variable.
 3. Decide which opcode to produce:
     1. If the variable is a cell variable or a free variable, produce `*_DEREF` opcode; produce the `LOAD_CLASSDEREF` opcode to load the value if the current code block is a class definition.
     2. If the variable is a local variable and the current code block is a function, produce `*_FAST` opcode.
     3. If the variable is an explicit global variable or if it's an implicit global variable and the current code block is a function, produce `*_GLOBAL` opcode.
     4. Otherwise, produce `*_NAME` opcode.
 
-You don't need to remember these rules. You can always read the source code. Check out [`Python/symtable.c`](https://github.com/python/cpython/blob/3.9/Python/symtable.c#L497) to see how the compiler determines the scope of a variable and [`Python/compile.c`](https://github.com/python/cpython/blob/3.9/Python/compile.c#L3550) to see how it decides which opcode to produce.
+You don't need to remember these rules. You can always read the source code. Check out [`Python/symtable.c`](https://github.com/python/cpython/blob/3.9/Python/symtable.c#L497) to see how the compiler determines the scope of a variable, and [`Python/compile.c`](https://github.com/python/cpython/blob/3.9/Python/compile.c#L3550) to see how it decides which opcode to produce.
 
 ## Conclusion
 
