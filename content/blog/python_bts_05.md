@@ -22,7 +22,7 @@ Today we'll answer these questions and understand how variables, so crucial aspe
 
 Where should we start our investigation? We know from the previous parts that to run Python code, CPython compiles it to bytecode, so let's start by looking at the bytecode to which `a = b` compiles:
 
-```
+```text
 $ echo 'a = b' | python -m dis
 
   1           0 LOAD_NAME                0 (b)
@@ -173,7 +173,7 @@ def f(y, z):
 
 The function `f` has to load the values of variables `x`, `y` and `z` to add them and return the result. Note which opcodes the compiler produces to do that:
 
-```
+```text
 $ python -m dis global_fast_deref.py
 ...
   7          12 LOAD_GLOBAL              0 (x)
@@ -211,7 +211,7 @@ f()
 ```
 
 ```text
-$ python3 namespaces.py 
+$ python namespaces.py 
 I'm a variable in a global namespace
 I'm a variable in a global namespace
 I'm a local variable
@@ -306,7 +306,7 @@ CPython uses four pairs of load/store opcodes and one more load opcode in total:
 * `LOAD_NAME` and `STORE_NAME`; and
 * `LOAD_CLASSDEREF`.
 
-Let's figure out when the compiler produces them, what they do and why CPython needs all of them.
+Let's figure out what they do and why CPython needs all of them.
 
 ## LOAD_FAST and STORE_FAST
 
@@ -318,7 +318,7 @@ def f(x):
     return y
 ```
 
-```
+```text
 $ python -m dis fast_variables.py
 ...
   2           0 LOAD_FAST                0 (x)
@@ -345,7 +345,7 @@ case TARGET(STORE_FAST): {
 
 We've seen that in the case of the `STORE_NAME` opcode, the VM first gets the name from `co_names` and then maps that name to the value on top of the stack. It uses `f_locals` as a name-value mapping, which is usually a dictionary. In the case of the `STORE_FAST` opcode, the VM doesn't need to get the name. The number of local variables can be calculated statically by the compiler, so the VM can use an array to store their values. Each local variable can the be associated with an index of that array. To map a name to a value, the VM simply stores the value in the corresponding index.
 
-The VM doesn't need to get the names of variables local to a function to load and store their values. Nevertheless, it stores these names in a code object of the function in the `co_varnames` tuple. Why? Names are necessary for debugging and error messages. They are also used by the tools such as `dis` that reads  `co_varnames` to display names in parentheses:
+The VM doesn't need to get the names of variables local to a function to load and store their values. Nevertheless, it stores these names in a function's code object in the `co_varnames` tuple. Why? Names are necessary for debugging and error messages. They are also used by the tools such as `dis` that reads  `co_varnames` to display names in parentheses:
 
 ```text
               2 STORE_FAST               1 (y)
@@ -430,7 +430,7 @@ def f():
         return b
 ```
 
-```
+```text
 $ python -m dis nested.py
 ...
 Disassembly of <code object f at 0x1027c72f0, file "nested.py", line 1>:
@@ -594,7 +594,7 @@ case TARGET(STORE_GLOBAL): {
 
 The `f_globals` field of a frame object is a dictionary that maps global names to their values. When CPython creates a frame object for a module, it assigns `f_globals` to the dictionary of the module. We can easily check this:
 
-```text
+```pycon
 $ python -q
 >>> import sys
 >>> globals() is sys.modules['__main__'].__dict__
@@ -709,7 +709,7 @@ Why does it check the locals dictionary first? In the case of a function, the co
 
 We can see now why the compiler produces the `LOAD_NAME` and `STORE_NAME` opcodes for class definitions but we also saw that it produces these opcodes for variables within the module's namespace, as in the `a = b` example. They work as expected because module's `f_locals` and module's `f_globals` is the same thing:
 
-```text
+```pycon
 $ python -q
 >>> locals() is globals()
 True
@@ -725,7 +725,7 @@ class A:
     exec('print(a + b)', globals(), locals())
 ```
 
-```
+```text
 $ python exec.py
 3
 ```
@@ -754,6 +754,6 @@ You don't need to remember these rules. You can always read the source code. Che
 
 ## Conclusion
 
-The topic of Python variables is much more complicated than it may seem at first. A good portion of the Python documentation is related to variables, including a [section on naming and binding](https://docs.python.org/3/reference/executionmodel.html#naming-and-binding) and a [section on scopes and namespaces](https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces). The top questions of [the Python FAQ](https://docs.python.org/3/faq/programming.html) are about variables. I say nothing about questions on Stack Overflow. While the official resources give some idea why the variables work the way they do, it's still hard to understand and remember all the rules. Fortunately, it's easier to understand how variables work in Python by studying the source code of the Python implementation. And that's what we did today.
+The topic of Python variables is much more complicated than it may seem at first. A good portion of the Python documentation is related to variables, including a [section on naming and binding](https://docs.python.org/3/reference/executionmodel.html#naming-and-binding) and a [section on scopes and namespaces](https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces). The top questions of [the Python FAQ](https://docs.python.org/3/faq/programming.html) are about variables. I say nothing about questions on Stack Overflow. While the official resources give some idea why Python variables work the way they do, it's still hard to understand and remember all the rules. Fortunately, it's easier to understand how Python variables work by studying the source code of the Python implementation. And that's what we did today.
 
 We've studied a group of opcodes that CPython uses to load and store values of variables. To understand how the VM executes other opcodes that actually compute something, we need to discuss the core of Python – Python object system. This is our plan for the next time.
