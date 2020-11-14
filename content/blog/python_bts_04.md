@@ -457,7 +457,7 @@ We've also looked at two data structures crucial for the bytecode execution:
 * the value stack that the VM uses to compute things; and
 * the block stack that the VM uses to handle exceptions.
 
-The most important conclusion from the post is this: if you want to study the implementation of some aspect of Python, the evaluation loop is a perfect place to start. Want to know what happens when you write `x + y`? Take a look at the code for the `BINARY_ADD` opcode. Want to know how the `with` statement is implemented? See `SETUP_WITH`. Interested in the exact semantics of a function call? The `CALL_FUNCTION` opcode is what you're looking for. We'll apply this method next time when study how variables are implemented in CPython.
+The most important conclusion from the post is this: if you want to study the implementation of some aspect of Python, the evaluation loop is a perfect place to start. Want to know what happens when you write `x + y`? Take a look at the code for the `BINARY_ADD` opcode. Want to know how the `with` statement is implemented? See `SETUP_WITH`. Interested in the exact semantics of a function call? The `CALL_FUNCTION` opcode is what you're looking for. We'll apply this method [next time]({filename}/blog/python_bts_05.md) when study how variables are implemented in CPython.
 
 <br>
 
