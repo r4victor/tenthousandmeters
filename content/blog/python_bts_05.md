@@ -12,7 +12,7 @@ The meaning of this statement may seem trivial. What we do here is take the valu
 
 * What does it mean for a name to be associated with a value? What is a value?
 * What does CPython do to assign a value to a name? To get the value?
-* Are all the variables implemented in the same way?
+* Are all variables implemented in the same way?
 
 Today we'll answer these questions and understand how variables, so crucial aspect of a programming language, are implemented in CPython.
 
@@ -33,9 +33,9 @@ $ echo 'a = b' | python -m dis
 [Last time]({filename}/blog/python_bts_04.md) we learned that the CPython VM operates using the value stack. A typical bytecode instruction pops values from the stack, does something with them and pushes the result of the computation back onto the stack. The `LOAD_NAME` and `STORE_NAME` instructions are typical in that respect. Here's what they do in our example:
 
 * `LOAD_NAME` gets the value of the name `b` and pushes it onto the stack.
-* `STORE_NAME` pops the value from the stack and binds the name `a` to that value.
+* `STORE_NAME` pops the value from the stack and associates the name `a` with that value.
 
-Last time we also learned that all opcodes are implemented in a giant `switch` statement in `Python/ceval.c`, so we can learn what the `LOAD_NAME` and `STORE_NAME` opcodes do in more detail by studying the correspoding cases of that `switch`. Let's start with the `STORE_NAME` opcode since we need to associate a name with some value before we can get the value of that name. Here's the `case` block that executes the  `STORE_NAME` opcode: 
+Last time we also learned that all opcodes are implemented in a giant `switch` statement in [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c#L1464), so we can see how the `LOAD_NAME` and `STORE_NAME` opcodes work by studying the corresponding cases of that `switch`. Let's start with the `STORE_NAME` opcode since we need to associate a name with some value before we can get the value of that name. Here's the `case` block that executes the  `STORE_NAME` opcode: 
 
 ```C
 case TARGET(STORE_NAME): {
@@ -144,14 +144,14 @@ case TARGET(LOAD_NAME): {
 }
 ```
 
-This code translates to Engish as follows:
+This code translates to English as follows:
 
 1. As for the `STORE_NAME` opcode, the VM first gets the name of a variable.
 2. The VM looks up the value of the name in the mapping of local variables: `v = f_locals[name]`.
-3. If the name is not in `f_locals`, the VM looks up the value in the dictionary of global variables `f_globals`. And if the name is not in `f_globals` either, the VM looks up the value in `f_builtins`. The `f_builtins` field of a frame object points  to the dictionary of the `builtins` module, which contains bult-in types, functions, exceptions and constants. If the name is not there, the VM gives up and sets the `NameError` exception. 
+3. If the name is not in `f_locals`, the VM looks up the value in the dictionary of global variables `f_globals`. And if the name is not in `f_globals` either, the VM looks up the value in `f_builtins`. The `f_builtins` field of a frame object points  to the dictionary of the `builtins` module, which contains built-in types, functions, exceptions and constants. If the name is not there, the VM gives up and sets the `NameError` exception. 
 4. If the VM finds the value, it pushes the value onto the stack.
 
-The way the VM searches for a name has the following effects:
+The way the VM searches for a value has the following effects:
 
 * We always have the names from the `builtin`'s dictionary, such as `int`, `next`, `ValueError` and `None`, at our disposal.
 * If we use a built-in name for a local variable or a global variable, the new variable will shadow the built-in one.
@@ -159,7 +159,7 @@ The way the VM searches for a name has the following effects:
 * A local variable shadows the global variable with the same name.
   
 
-Since all we need to be able to do with variables is to associate them with values and to get their values, you might think that the `STORE_NAME` and `LOAD_NAME` opcodes are sufficient to implement Python variables. This is not the case. Consider the example:
+Since all we need to be able to do with variables is to associate them with values and to get their values, you might think that the `STORE_NAME` and `LOAD_NAME` opcodes are sufficient to implement all variables in Python. This is not the case. Consider the example:
 
 ```python
 x = 1
@@ -189,7 +189,7 @@ None of the opcodes are `LOAD_NAME`. The compiler produces the `LOAD_GLOBAL` opc
 
 ## Namespaces and scopes
 
-A Python program cosists of code blocks. A code block is a piece of code that the VM executes as a single unit. CPython distingushes three types of code blocks:
+A Python program consists of code blocks. A code block is a piece of code that the VM executes as a single unit. CPython distinguishes three types of code blocks:
 
 * module
 * function (comprehensions and lambdas are also functions)
@@ -257,7 +257,7 @@ $ python unbound_local.py
 UnboundLocalError: local variable 'a' referenced before assignment
 ```
 
-The `a += 1` statement is a form of assignment, so the compiler thinks that `a` is local. To perfrom the operation, the VM tries to load the value of `a`, fails and sets the exception. To tell the compiler that `a` is global despite the assignment, we can use the `global` statement:
+The `a += 1` statement is a form of assignment, so the compiler thinks that `a` is local. To perform the operation, the VM tries to load the value of `a`, fails and sets the exception. To tell the compiler that `a` is global despite the assignment, we can use the `global` statement:
 
 ```python
 a = 1
@@ -555,7 +555,7 @@ $ python counter.py
 1
 ```
 
-Recall that when we call a function, CPython creates a frame object to execute it. This example shows that an enclosed function can outlive the frame object of an enclosing function. The benefit of the cell mechasim is that it allows to avoid keeping the frame object of an enclosing function and all its references in memory.
+Recall that when we call a function, CPython creates a frame object to execute it. This example shows that an enclosed function can outlive the frame object of an enclosing function. The benefit of the cell mechanism is that it allows to avoid keeping the frame object of an enclosing function and all its references in memory.
 
 ## LOAD_GLOBAL and STORE_GLOBAL
 
@@ -603,7 +603,7 @@ True
 
 When the VM executes the `MAKE_FUNCTION` opcode to create a new function object, it assigns the `func_globals` field of that object to `f_globals` of the current frame object. When the function gets called, the VM creates a new frame object for it with `f_globals` set to `func_globals`.
 
-The implementation of `LOAD_GLOBAL` is similiar to that of `LOAD_NAME` with two exceptions:
+The implementation of `LOAD_GLOBAL` is similar to that of `LOAD_NAME` with two exceptions:
 
 * It doesn't look up values in `f_locals`.
 * It uses cache to decrease the lookup time.
@@ -625,7 +625,7 @@ struct _PyOpcache {
 };
 ```
 
-The `ptr` field of the `_PyOpcache_LoadGlobal` struct points to the actual result of `LOAD_GLOBAL`. The cache is maintained per instruction number. Another array in a code object called `co_opcache_map` maps each instruction in the bytecode to its index minus one in `co_opcache`. If an instruction is not `LOAD_GLOBAL`, it maps the instruction to `0`, which means that the instruction is never cached. The size of the cache doesn't exceed 254. If bytecode contains more than 254 `LOAD_GLOBAL` instructions, `co_opcache_map` maps extra instructions to `0` as well.
+The `ptr` field of the `_PyOpcache_LoadGlobal` struct points to the actual result of `LOAD_GLOBAL`. The cache is maintained per instruction number. Another array in a code object called `co_opcache_map` maps each instruction in the bytecode to its index minus one in `co_opcache`. If an instruction is not `LOAD_GLOBAL`, it maps the instruction to `0`, which means that the instruction is never cached. The size of the cache doesn't exceed 254. If the bytecode contains more than 254 `LOAD_GLOBAL` instructions, `co_opcache_map` maps extra instructions to `0` as well.
 
 If the VM finds a value in the cache when it executes `LOAD_GLOBAL`, it makes sure that the `f_global` and `f_builtins` dictionaries haven't been modified since the last time the value was looked up. This is done by comparing `globals_ver` and `builtins_ver` with `ma_version_tag` of the dictionaries. The `ma_version_tag` field of a dictionary changes each time the dictionary is modified. See [PEP 509](https://www.python.org/dev/peps/pep-0509/) for more details.
 
@@ -647,7 +647,9 @@ $ python create_class.py
 This code is executed
 ```
 
-The compiler creates code objects for class definitions just as it creates code objects for modules and functions. What's interesting is that the compiler always produces the `LOAD_NAME` and `STORE_NAME` opcodes for variables within a class body (with the single exception of free variables). As a result, variables work differently in a class body than they do in a function:
+The compiler creates code objects for class definitions just as it creates code objects for modules and functions. What's interesting is that the compiler almost always produces the `LOAD_NAME` and `STORE_NAME` opcodes for variables within a class body. There are two rare exceptions to this rule: free variables and variables explicitly declared `global`. 
+
+The VM executes `*_NAME` opcodes and `*_FAST` opcodes differently. As a result, variables work differently in a class body than they do in a function:
 
 ```python
 x = 'global'
@@ -728,7 +730,7 @@ $ python exec.py
 3
 ```
 
-CPython chose to always use the `LOAD_NAME` and `STORE_NAME` opcodes for modules. In this way, the bytecode the compiler produces when we run a module in a normal way and when we execute the module with `exec()` is the same.
+CPython chose to always use the `LOAD_NAME` and `STORE_NAME` opcodes for modules. In this way, the bytecode the compiler produces when we run a module in a normal way is the same as when we execute the module with `exec()`.
 
 ## How the compiler decides which opcode to produce
 
@@ -752,3 +754,6 @@ You don't need to remember these rules. You can always read the source code. Che
 
 ## Conclusion
 
+The topic of Python variables is much more complicated than it may seem at first. A good portion of the Python documentation is related to variables, including a [section on naming and binding](https://docs.python.org/3/reference/executionmodel.html#naming-and-binding) and a [section on scopes and namespaces](https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces). The top questions of [the Python FAQ](https://docs.python.org/3/faq/programming.html) are about variables. I say nothing about questions on Stack Overflow. While the official resources give some idea why the variables work the way they do, it's still hard to understand and remember all the rules. Fortunately, it's easier to understand how variables work in Python by studying the source code of the Python implementation. And that's what we did today.
+
+We've studied a group of opcodes that CPython uses to load and store values of variables. To understand how the VM executes other opcodes that actually compute something, we need to discuss the core of Python – Python object system. This is our plan for the next time.
