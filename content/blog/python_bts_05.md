@@ -1,6 +1,18 @@
 Title: Python behind the scenes #5: how variables are implemented in CPython
-Date: 2020-11-07 5:34
+Date: 2020-11-14 14:09
 Tags: Python behind the scenes, Python, CPython
+Summary: Consider a simple assignment statement in Python:
+    ```python
+    a = b
+    ```
+    The meaning of this statement may seem trivial. What we do here is take the value of the name `b` and assign it to the name `a`, but do we really? This is an ambiguous explanation that gives rise to a lot of questions:
+    <ul>
+    <li>What does it mean for a name to be associated with a value? What is a value?</li>
+    <li>What does CPython do to assign a value to a name? To get the value?</li>
+    <li>Are all variables implemented in the same way?</li>
+    </ul>
+    Today we'll answer these questions and understand how variables, so crucial aspect of a programming language, are implemented in CPython.
+
 
 Consider a simple assignment statement in Python:
 
@@ -66,7 +78,7 @@ Let's analyze what it does:
 2. The VM pops the value from the stack.
 3. Values of variables are stored in a frame object. The `f_locals` field of a frame object is a mapping from the names of local variables to their values. The VM associates a name `name` with a value `v` by setting `f_locals[name] = v`.
 
-We should learn from this two crucial facts:
+We learn from this two crucial facts:
 
 * Python variables are names mapped to values.
 * Values of names are references to Python objects.
@@ -757,3 +769,7 @@ You don't need to remember these rules. You can always read the source code. Che
 The topic of Python variables is much more complicated than it may seem at first. A good portion of the Python documentation is related to variables, including a [section on naming and binding](https://docs.python.org/3/reference/executionmodel.html#naming-and-binding) and a [section on scopes and namespaces](https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces). The top questions of [the Python FAQ](https://docs.python.org/3/faq/programming.html) are about variables. I say nothing about questions on Stack Overflow. While the official resources give some idea why Python variables work the way they do, it's still hard to understand and remember all the rules. Fortunately, it's easier to understand how Python variables work by studying the source code of the Python implementation. And that's what we did today.
 
 We've studied a group of opcodes that CPython uses to load and store values of variables. To understand how the VM executes other opcodes that actually compute something, we need to discuss the core of Python – Python object system. This is our plan for the next time.
+
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
