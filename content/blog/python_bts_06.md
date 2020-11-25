@@ -188,7 +188,7 @@ A type determines how the objects of that type behave. Each `tp_*` member of a t
 * `tp_str` is a pointer to a function that implements  `str()` for objects of the type.
 * `tp_hash` is a pointer to a function that implements  `hash()` for objects of the type.
 
-Some slots are grouped together in structs. For example, the `PySequenceMethods` struct contains the slots that implement the sequence protocol:
+Some slots, called sub-slots, are grouped together in structs. For example, the `PySequenceMethods` struct contains the sub-slots that implement the sequence protocol:
 
 ```C
 typedef struct {
@@ -206,5 +206,148 @@ typedef struct {
 } PySequenceMethods;
 ```
 
+A type has a lot of slots (and each slots is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the docs). Among these slots, there should be a slot that performs the addition. After careful inspection of the `PyTypeObject` struct, we find that its `tp_as_number` field points to a group of number-related slots. One of these slots is a binary function called `nb_add`:
 
+```C
+typedef struct {
+    binaryfunc nb_add; // definition of "binaryfunc":
+                       // typedef PyObject * (*binaryfunc)(PyObject *, PyObject *);
+    binaryfunc nb_subtract;
+    binaryfunc nb_multiply;
+    binaryfunc nb_remainder;
+    binaryfunc nb_divmod;
+    // ... more sub-slots
+} PyNumberMethods;
+```
+
+It seems that `nb_add` is what we're looking for. Let's see now how the `BINARY_ADD` opcode is implemented and find out if the VM indeed calls `nb_add` to add objects.
+
+## BINARY_ADD
+
+Like any other opcode, `BINARY_ADD` is implemented in the evaluation loop in [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c#L1684):
+
+```C
+case TARGET(BINARY_ADD): {
+    PyObject *right = POP();
+    PyObject *left = TOP();
+    PyObject *sum;
+    /* NOTE(haypo): Please don't try to micro-optimize int+int on
+        CPython using bytecode, it is simply worthless.
+        See http://bugs.python.org/issue21955 and
+        http://bugs.python.org/issue10044 for the discussion. In short,
+        no patch shown any impact on a realistic benchmark, only a minor
+        speedup on microbenchmarks. */
+    if (PyUnicode_CheckExact(left) &&
+                PyUnicode_CheckExact(right)) {
+        sum = unicode_concatenate(tstate, left, right, f, next_instr);
+        /* unicode_concatenate consumed the ref to left */
+    }
+    else {
+        sum = PyNumber_Add(left, right);
+        Py_DECREF(left);
+    }
+    Py_DECREF(right);
+    SET_TOP(sum);
+    if (sum == NULL)
+        goto error;
+    DISPATCH();
+}
+```
+
+That's an interesting peice of code. We can see that it calls `PyNumber_Add()` to add two objects, but if the objects are strings, it calls `unicode_concatenate()` instead. Why so? This is an optimization. Python strings seem immutable, but sometimes CPython mutates a string and thus avoids creating a new string. Consider appending one string to another:
+
+```python
+output += some_string
+```
+
+If the `output ` varialbe references a string that has no other references, it's safe to mutate that string. This what `unicode_concatenate()` does.
+
+It might be tempting to handle other special cases in the evaluation loop as well and optimize, for example, integers and floats. The comment explicitly warns against it. The problem is that a new special case comes with an additional check, and this check is only usefull when it succeeds. Otherwise, it may have a negative effect on performance. 
+
+After this little digression, let's look at `PyNumber_Add()`. We find this function in [`Objects/abstract.c`](https://github.com/python/cpython/blob/3.9/Objects/abstract.c#L1016):
+
+```C
+PyObject *
+PyNumber_Add(PyObject *v, PyObject *w)
+{
+  	// NB_SLOT(nb_add) expands to "offsetof(PyNumberMethods, nb_add)"
+    PyObject *result = binary_op1(v, w, NB_SLOT(nb_add));
+    if (result == Py_NotImplemented) {
+        PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
+        Py_DECREF(result);
+        if (m && m->sq_concat) {
+            return (*m->sq_concat)(v, w);
+        }
+        result = binop_type_error(v, w, "+");
+    }
+    return result;
+}
+```
+
+Let's first step into `binary_op1()` and figure out what `PyNumber_Add()` does later:
+
+```C
+static PyObject *
+binary_op1(PyObject *v, PyObject *w, const int op_slot)
+{
+    PyObject *x;
+    binaryfunc slotv = NULL;
+    binaryfunc slotw = NULL;
+
+    if (Py_TYPE(v)->tp_as_number != NULL)
+        slotv = NB_BINOP(Py_TYPE(v)->tp_as_number, op_slot);
+    if (!Py_IS_TYPE(w, Py_TYPE(v)) &&
+        Py_TYPE(w)->tp_as_number != NULL) {
+        slotw = NB_BINOP(Py_TYPE(w)->tp_as_number, op_slot);
+        if (slotw == slotv)
+            slotw = NULL;
+    }
+    if (slotv) {
+        if (slotw && PyType_IsSubtype(Py_TYPE(w), Py_TYPE(v))) {
+            x = slotw(v, w);
+            if (x != Py_NotImplemented)
+                return x;
+            Py_DECREF(x); /* can't do it */
+            slotw = NULL;
+        }
+        x = slotv(v, w);
+        if (x != Py_NotImplemented)
+            return x;
+        Py_DECREF(x); /* can't do it */
+    }
+    if (slotw) {
+        x = slotw(v, w);
+        if (x != Py_NotImplemented)
+            return x;
+        Py_DECREF(x); /* can't do it */
+    }
+    Py_RETURN_NOTIMPLEMENTED;
+}
+```
+
+The `binary_op1()` function takes an offset of a number slot as a parameter (in our case, the slot is `nb_add`). Then it gets the corresponding slots of both operands and implements essentialy the following logic:
+
+1. If the type of one operand is a subtype of another, call the slot of the subtype.
+
+2. If the left operand doesn't have the slot, call the slot of the right operand.
+
+3. Otherwise, call the slot of the left operand.
+
+The reason to always call the slot of a subtype is to allow the subtypes to override the behaviour of their ancestors:
+
+```pycon
+$ python -q
+>>> class HungryInt(int):
+...     def __add__(self, o):
+...             return self
+...
+>>> x = HungryInt(5)
+>>> x + 2
+5
+>>> 2 + x
+7
+>>> HungryInt.__radd__ = lambda self, o: self
+>>> 2 + x
+5
+```
 
