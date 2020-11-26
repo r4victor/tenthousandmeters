@@ -367,7 +367,92 @@ A type can support the `+` operator either by defining `nb_add` or by defining `
 
 Built-in types such as `int` and `float` implement `nb_add`, and built-in types such as `str` and `list` implement `sq_concat`. Technically, there's no much difference. The main reason to choose one slot over another is to indicate the appropriate meaning. In fact, the `sq_concat` slot is so unnecessary that it's set to `NULL` for all user-defined types (i.e. classes).
 
-We assured ourselves that the VM calls the `nb_add` slot to perfrom the addition. Let's see now how `nb_add` is implemented.
+We assured ourselves that the VM calls the `nb_add` slot to perfrom the addition. Let's see now how different types implement this slot.
 
-## How to create a type
+## How slots are set
+
+The way the slots of a type are set depends on how that type is created. There are two ways to create a type object:
+
+* by statically defining it; or
+* by dynamically allocating it.
+
+### Statically defined types
+
+An example of a statically defined type is any built-in type. Here's, for instance, how CPython defines the `float` type:
+
+```C
+PyTypeObject PyFloat_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    "float",
+    sizeof(PyFloatObject),
+    0,
+    (destructor)float_dealloc,                  /* tp_dealloc */
+    0,                                          /* tp_vectorcall_offset */
+    0,                                          /* tp_getattr */
+    0,                                          /* tp_setattr */
+    0,                                          /* tp_as_async */
+    (reprfunc)float_repr,                       /* tp_repr */
+    &float_as_number,                           /* tp_as_number */
+    0,                                          /* tp_as_sequence */
+    0,                                          /* tp_as_mapping */
+    (hashfunc)float_hash,                       /* tp_hash */
+    0,                                          /* tp_call */
+    0,                                          /* tp_str */
+    PyObject_GenericGetAttr,                    /* tp_getattro */
+    0,                                          /* tp_setattro */
+    0,                                          /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,   /* tp_flags */
+    float_new__doc__,                           /* tp_doc */
+    0,                                          /* tp_traverse */
+    0,                                          /* tp_clear */
+    float_richcompare,                          /* tp_richcompare */
+    0,                                          /* tp_weaklistoffset */
+    0,                                          /* tp_iter */
+    0,                                          /* tp_iternext */
+    float_methods,                              /* tp_methods */
+    0,                                          /* tp_members */
+    float_getset,                               /* tp_getset */
+    0,                                          /* tp_base */
+    0,                                          /* tp_dict */
+    0,                                          /* tp_descr_get */
+    0,                                          /* tp_descr_set */
+    0,                                          /* tp_dictoffset */
+    0,                                          /* tp_init */
+    0,                                          /* tp_alloc */
+    float_new,                                  /* tp_new */
+};
+```
+
+All slots of a statically defined type are specified explicitly. We can easily see how the `float` type implements `nb_add` by looking at the number slots:
+
+```C
+static PyNumberMethods float_as_number = {
+    float_add,          /* nb_add */
+    float_sub,          /* nb_subtract */
+    float_mul,          /* nb_multiply */
+    // ... more number slots
+};
+```
+
+where we find `float_add`, a straightforward implementation:
+
+```C
+static PyObject *
+float_add(PyObject *v, PyObject *w)
+{
+    double a,b;
+    CONVERT_TO_DOUBLE(v, a);
+    CONVERT_TO_DOUBLE(w, b);
+    a = a + b;
+    return PyFloat_FromDouble(a);
+}
+```
+
+The floating-point arithmetic is not that important for our discussion. What's important is that we know how the VM evaluates the expression `x + 7` when the type of `x` is a built-in type  and, furthermore, we know how the behaviour of a built-in object is determined.
+
+... special methods of built-in types
+
+... custom types
+
+
 
