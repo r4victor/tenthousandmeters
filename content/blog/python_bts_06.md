@@ -7,7 +7,7 @@ As we know from the previous parts of this series, the execution of a Python pro
 1. The CPython compiler translates Python code to bytecode.
 2. The CPython VM executes the bytecode.
 
-We've been focusing on the second step for quite a while. In part 4 we've looked at the evaluation loop, a place where the bytecode gets executed. And in part 5 we've studied how the VM executes the instructions that are used to implement variables. What we haven't covered yet is how the VM actually computes something. We postponed this question because to answer it, we first need to understand how the most fundamental part of the language works. Today we'll study the Python object model.
+We've been focusing on the second step for quite a while. In part 4 we've looked at the evaluation loop, a place where the bytecode gets executed. And in part 5 we've studied how the VM executes the instructions that are used to implement variables. What we haven't covered yet is how the VM actually computes something. We postponed this question because to answer it, we first need to understand how the most fundamental part of the language works. Today, we'll study the Python object system.
 
 ## Motivation
 
@@ -38,7 +38,7 @@ And the VM executes this bytecode as follows:
 
 Note that the compiler doesn't know whether `x` is an integer, a float, a list or something else, so it always produces the same `BINARY_ADD` opcode to perform the addition. The VM, therefore, must be able to figure out the right way to add `x` to `7` depending on what `x` is.
 
-CPython solves this problem by representing everything in the language as a Python object (hence the phrase "Everything in Python is an object"). So, the VM needs to work only with Python objects. All values the VM stores on the value stack are pointers to Python objects. The VM doesn't know how to add integers or floats but it knows that any Python object has a type. A type, in turn, knows everything about objects of that type. The `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
+CPython solves this problem by representing everything in the language as a Python object (hence the phrase "Everything in Python is an object"). So, the VM needs to work only with Python objects, and all values the VM stores on the value stack are pointers to Python objects. The VM doesn't know how to add integers or floats but it knows that any Python object has a type. A type, in turn, knows everything about objects of that type. The `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
 
 This simplified explanation captures the essence of the solution, but it also omits a lot of important details. For example, you might think that to add `x` to `7`, the VM simply calls something like `x.__add__(7)`, `type(x).__add__(x, 7)` or `(7).__radd__(x)`, but the reality is a bit more complicated. To get a more realistic picture, we need to understand what Python objects and types really are and how they work.
 
@@ -260,7 +260,7 @@ That's an interesting peice of code. We can see that it calls `PyNumber_Add()` t
 output += some_string
 ```
 
-If the `output ` varialbe references a string that has no other references, it's safe to mutate that string. This what `unicode_concatenate()` does.
+If the `output ` variable points to a string that has no other references, it's safe to mutate that string. This what `unicode_concatenate()` does.
 
 It might be tempting to handle other special cases in the evaluation loop as well and optimize, for example, integers and floats. The comment explicitly warns against it. The problem is that a new special case comes with an additional check, and this check is only usefull when it succeeds. Otherwise, it may have a negative effect on performance. 
 
@@ -339,7 +339,7 @@ The reason to always call the slot of a subtype is to allow the subtypes to over
 $ python -q
 >>> class HungryInt(int):
 ...     def __add__(self, o):
-...             return self
+...         return self
 ...
 >>> x = HungryInt(5)
 >>> x + 2
@@ -350,4 +350,24 @@ $ python -q
 >>> 2 + x
 5
 ```
+
+Let's turn back to `PyNumber_Add()`. If `binary_op1()` succeeds, `PyNumber_Add()` simply returns the result of `binary_op1()`. If `binary_op1()` returns the [`NotImplemented`](https://docs.python.org/3/library/constants.html#NotImplemented) constant, which means that the operation cannot be performed for a given combination of types, `PyNumber_Add()` tries to call the `sq_concat` sequence slot of the first operand and returns the result of this call:
+
+```C
+PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
+if (m && m->sq_concat) {
+    return (*m->sq_concat)(v, w);
+}
+```
+
+A type can support the `+` operator either by defining `nb_add` or by defining `sq_concat`. These slots have  different semantics:
+
+* `nb_add` means algebraic addition with properties like `a + b = b + a`.
+* `sq_concat` means the concatenation of sequences.
+
+Built-in types such as `int` and `float` implement `nb_add`, and built-in types such as `str` and `list` implement `sq_concat`. Technically, there's no much difference. The main reason to choose one slot over another is to indicate the appropriate meaning. In fact, the `sq_concat` slot is so unnecessary that it's set to `NULL` for all user-defined types (i.e. classes).
+
+We assured ourselves that the VM calls the `nb_add` slot to perfrom the addition. Let's see now how `nb_add` is implemented.
+
+## How to create a type
 
