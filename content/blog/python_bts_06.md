@@ -510,7 +510,7 @@ A namespace is a dictionary that serves as a prototype for the dictionary of a c
 Let's summarize what `__build_class__()` does:
 
 1. It determines the metatype that will be used to create a class.
-2. It initializes the empty namespace or calls metatypes' `__prepare__`.
+2. It initializes the empty namespace or calls metatype's `__prepare__`.
 3. It executes the body of the class in the namespaces.
 4. It calls the metatype to create the class.
 
@@ -531,9 +531,41 @@ How exactly `__build_class__()` determines the metatype is nicely [described](ht
 >
 > The most derived metaclass is selected from the explicitly specified metaclass (if any) and the metaclasses (i.e. `type(cls)`) of all specified base classes. The most derived metaclass is one which is a subtype of *all* of these candidate metaclasses. If none of the candidate metaclasses meets that criterion, then the class definition will fail with `TypeError`.
 
-As we can see the metatype defaults to `type`. So, typically, `__build_class__()` calls `type` to create a class. A Python object is callable when its type implements the `tp_call` slot. The type of `type` is `type` itself, and its `tp_call` slot is set to the `type_call` function. This function is invoked when we call any type whose metatype is `type`, not just `type` itself, that is, when we call `type()`, `str()`, `list()` or `MyClass()`. The result of such a call is a new object of the called type.
+As we can see the metatype defaults to `type`. So, typically, `__build_class__()` calls `type` to create a class. A Python object is callable when its type implements the `tp_call` slot. The type of `type` is `type` itself, and its `tp_call` slot points to the `type_call()` function. This function is invoked when we call any type whose metatype is `type`, not just `type` itself, that is, when we call `type()`, `str()`, `list()` or `MyClass()`. The result of such a call is a new object of the called type.
 
 What `type_call` does is essentialy two things:
 
 1. It calls `tp_new` of a type to create an object.
 2. It calls `tp_init` of a type to initialize the created object.
+
+The `tp_new` slot of `type` points to the `type_new()` function. This is the function that creates classes. The `tp_init` slot of `type` points to the function that does nothing, so all the work is done by `type_new()`. The `type_new()` function is nearly 500 lines long and probably deserves a separate post. Recall that we started our disscussion about classes because we wanted to understand how their slots are set, in particular, the `nb_add` slot. So, for now, let's concentrate on this issue.
+
+What `type_new()` does can roughly be summarized as follows:
+
+1. Allocate `PyHeapTypeObject`.
+2. Set type's slots.
+
+`PyHeapTypeObject` is a struct that extends `PyTypeObject`. It contains `PyTypeObject` as well as structs with sub-slots:
+
+```C
+/* The *real* layout of a type object when allocated on the heap */
+typedef struct _heaptypeobject {
+    PyTypeObject ht_type;
+    PyAsyncMethods as_async;
+    PyNumberMethods as_number;
+    PyMappingMethods as_mapping;
+    PySequenceMethods as_sequence;
+    PyBufferProcs as_buffer;
+    PyObject *ht_name, *ht_slots, *ht_qualname;
+    struct _dictkeysobject *ht_cached_keys;
+    PyObject *ht_module;
+    /* here are optional user slots, followed by the members. */
+} PyHeapTypeObject;
+```
+
+`PyTypeObject` doesn't contain structs with sub-slots, only pointers to them, so it makes sense to have `PyHeapTypeObject` to allocate everything at once.
+
+The next step is to set the slots of the allocated type. What would you expect `nb_add` of a class to be? We know that we can define special methods such as `__add__()` and `__radd__()` to specify how to add objects of a class. But what's the connection between special methods and slots? That's the ultimate question of our investigation.
+
+It turns out that CPython keeps a mapping between special methods and slots.
+
