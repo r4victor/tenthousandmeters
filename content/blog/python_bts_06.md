@@ -567,5 +567,60 @@ typedef struct _heaptypeobject {
 
 The next step is to set the slots of the allocated type. What would you expect `nb_add` of a class to be? We know that we can define special methods such as `__add__()` and `__radd__()` to specify how to add objects of a class. But what's the connection between special methods and slots? That's the ultimate question of our investigation.
 
-It turns out that CPython keeps a mapping between special methods and slots.
+It turns out that CPython keeps a mapping between special methods and slots. This mapping is represented by an array of `slotdef` structs. Each `slotdef` struct contains the name of a special method, the offset of the corresponding slot in the `PyTypeObject` struct, a poiner to the slot's default function and some other things:
 
+```C
+// typedef struct wrapperbase slotdef;
+
+struct wrapperbase {
+    const char *name;
+    int offset;
+    void *function;
+    wrapperfunc wrapper;
+    const char *doc;
+    int flags;
+    PyObject *name_strobj;
+};
+```
+
+And here's how the mapping is defined:
+
+```C
+#define TPSLOT(NAME, SLOT, FUNCTION, WRAPPER, DOC) \
+    {NAME, offsetof(PyTypeObject, SLOT), (void *)(FUNCTION), WRAPPER, \
+     PyDoc_STR(DOC)}
+
+static slotdef slotdefs[] = {
+  TPSLOT("__getattribute__", tp_getattr, NULL, NULL, ""),
+  TPSLOT("__getattr__", tp_getattr, NULL, NULL, ""),
+  TPSLOT("__setattr__", tp_setattr, NULL, NULL, ""),
+  TPSLOT("__delattr__", tp_setattr, NULL, NULL, ""),
+  TPSLOT("__repr__", tp_repr, slot_tp_repr, wrap_unaryfunc,
+         "__repr__($self, /)\n--\n\nReturn repr(self)."),
+  TPSLOT("__hash__", tp_hash, slot_tp_hash, wrap_hashfunc,
+         "__hash__($self, /)\n--\n\nReturn hash(self)."),
+  // ... more slotdefs
+}
+
+```
+
+This is not a one-to-one mapping. For example, both `__add__()` and `__radd__()` special methods map to the same `nb_add` slot. Conversely, both the `mp_subscript` mapping slot and the `sq_item` sequence slot map to the same `__getitem__()` special method.
+
+CPython uses the `slotdefs` array to set the slots of a class. The `type_new()` function calls `fixup_slot_dispatchers()` to do that. The latter calls `update_one_slot()` for each struct in `slotdefs`. This function looks up the special method corresponding to struct's `name` in the class. For example, if struct's `name` is `"__add__"`, it looks up `A.__add__`. If it finds such a method, it sets the slot specified by struct's `offset` to the function specified by struct's `function`.
+
+Let's see how the `nb_add` slot is set. It correspods to the following structs in `slotdefs`:
+
+```C
+static slotdef slotdefs[] = {
+    // ...
+    BINSLOT("__add__", nb_add, slot_nb_add, "+"),
+    RBINSLOT("__radd__", nb_add, slot_nb_add,"+"),
+    // ...
+}
+```
+
+
+
+
+
+... The implementation details of `update_one_slot()`
