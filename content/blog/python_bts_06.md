@@ -567,7 +567,9 @@ typedef struct _heaptypeobject {
 
 The next step is to set the slots of the allocated type. What would you expect `nb_add` of a class to be? We know that we can define special methods such as `__add__()` and `__radd__()` to specify how to add objects of a class. But what's the connection between special methods and slots? That's the ultimate question of our investigation.
 
-It turns out that CPython keeps a mapping between special methods and slots. This mapping is represented by an array of `slotdef` structs. Each `slotdef` struct contains the name of a special method, the offset of the corresponding slot in the `PyTypeObject` struct, a poiner to the slot's default function and some other things:
+## Special methods and slots
+
+It turns out that CPython keeps a mapping between special methods and slots. This mapping is represented by an array of `slotdef` structs. Each `slotdef` struct contains the name of a special method, the offset of the corresponding slot in the `PyHeapTypeObject` struct, a poiner to the slot's default function and some other things:
 
 ```C
 // typedef struct wrapperbase slotdef;
@@ -608,7 +610,7 @@ This is not a one-to-one mapping. For example, both `__add__()` and `__radd__()`
 
 CPython uses the `slotdefs` array to set the slots of a class. The `type_new()` function calls `fixup_slot_dispatchers()` to do that. The latter calls `update_one_slot()` for each struct in `slotdefs`. This function looks up the special method corresponding to struct's `name` in the class. For example, if struct's `name` is `"__add__"`, it looks up `A.__add__`. If it finds such a method, it sets the slot specified by struct's `offset` to the function specified by struct's `function`.
 
-Let's see how the `nb_add` slot is set. It correspods to the following structs in `slotdefs`:
+Let's see how the `nb_add` slot is set. It corresponds to the following `slotdefs` entries:
 
 ```C
 static slotdef slotdefs[] = {
@@ -619,8 +621,79 @@ static slotdef slotdefs[] = {
 }
 ```
 
+that expand to:
 
+```C
+static slotdef slotdefs[] = {
+    // ...
+    // {name, offset, function,
+  	//     wrapper, doc}
+  	// 
+    {"__add__", offsetof(PyHeapTypeObject, as_number.nb_add), (void *)(slot_nb_add),
+        wrap_binaryfunc_l, PyDoc_STR("__add__" "($self, value, /)\n--\n\nReturn self" "+" "value.")},
 
+    {"__radd__", offsetof(PyHeapTypeObject, as_number.nb_add), (void *)(slot_nb_add),
+        wrap_binaryfunc_r, PyDoc_STR("__radd__" "($self, value, /)\n--\n\nReturn value" "+" "self.")},
+    // ...
+}
+```
 
+What's important here is that `function` of both entries is `slot_nb_add()`. When we define the `__add__()` method on a class, `update_one_slot()` finds it and sets the `nb_add` slot of the class to the `slot_nb_add()` function. Similarly, when we define the `__radd__()` method, `update_one_slot()` sets `nb_add` to `slot_nb_add()` as well. Note that when several special methods map to the same slot, they must agree an `function`.
 
-... The implementation details of `update_one_slot()`
+Now, what is `slot_nb_add()`, you ask? This function is defined with a macro that expands as follows:
+
+```C
+static PyObject *
+slot_nb_add(PyObject *self, PyObject *other) {
+    PyObject* stack[2];
+    PyThreadState *tstate = _PyThreadState_GET();
+    _Py_static_string(op_id, "__add__");
+    _Py_static_string(rop_id, "__radd__");
+    int do_other = !Py_IS_TYPE(self, Py_TYPE(other)) && \
+        Py_TYPE(other)->tp_as_number != NULL && \
+        Py_TYPE(other)->tp_as_number->nb_add == slot_nb_add;
+    if (Py_TYPE(self)->tp_as_number != NULL && \
+        Py_TYPE(self)->tp_as_number->nb_add == slot_nb_add) {
+        PyObject *r;
+        if (do_other && PyType_IsSubtype(Py_TYPE(other), Py_TYPE(self))) {
+            int ok = method_is_overloaded(self, other, &rop_id);
+            if (ok < 0) {
+                return NULL;
+            }
+            if (ok) {
+                stack[0] = other;
+                stack[1] = self;
+                r = vectorcall_maybe(tstate, &rop_id, stack, 2);
+                if (r != Py_NotImplemented)
+                    return r;
+                Py_DECREF(r); do_other = 0;
+            }
+        }
+        stack[0] = self;
+        stack[1] = other;
+        r = vectorcall_maybe(tstate, &op_id, stack, 2);
+        if (r != Py_NotImplemented || Py_IS_TYPE(other, Py_TYPE(self)))
+            return r;
+        Py_DECREF(r);
+    }
+    if (do_other) {
+        stack[0] = other;
+        stack[1] = self;
+        return vectorcall_maybe(tstate, &rop_id, stack, 2);
+    }
+    Py_RETURN_NOTIMPLEMENTED;
+}
+```
+
+You don't need to study this code carefully. It basicaly repeats the logic of its caller, `binary_op1()`. The main difference is that `slot_nb_add()` eventually calls `__add__()` or `__radd__()  ` special method.
+
+Now we know how the VM evaluates the expression `x + 7` when `x` is an instance of a class that defines `__add__()`:
+
+1. The VM calls `binary_op1()`.
+2. `binary_op1()` calls `slot_nb_add()`.
+3. `slot_nb_add()` calls `__add__()`.
+
+We've answered the question we started with. But, as it often happens, the answer gives rise to even more questions. Our goal for the rest of this post is to tackle those.
+
+## Setting special method on existing class
+
