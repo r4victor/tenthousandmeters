@@ -697,3 +697,46 @@ We've answered the question we started with. But, as it often happens, the answe
 
 ## Setting special method on existing class
 
+Suppose that we create a class without `__add__()` and `__radd__()` methods. In this case, the `nb_add` slot of the class is set to `NULL`. As expected, we cannot add instances of that class. If we, however, update the class by setting `__add__()` or `__radd__()`, the addition works as if the method was a part of the class definition. Here's what I mean:
+
+```pycon
+$ python -q
+>>> class A:
+...     pass
+... 
+>>> x = A()
+>>> x + 2
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+TypeError: unsupported operand type(s) for +: 'A' and 'int'
+>>> A.__add__ = lambda self, o: 5
+>>> x + 2
+5
+>>> 
+```
+
+How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary and, if the attribute is a special method, it sets the corresponding slots. It basically calls the same `update_one_slot()` function.
+
+## Inheritance
+
+When we define a class that inherits from other type, we expect the class to inherit some behavior of that type. For example, when we define a class  that inherits from `int`, we expect it to support the addition:
+
+```pycon
+$ python -q
+>>> class MyInt(int):
+...     pass
+... 
+>>> x = MyInt(2)
+>>> y = MyInt(4)
+>>> x + y
+6
+```
+
+Does `MyInt` inherit `nb_add` of `int`? How is that implemented? The `type_new()` function recieves a tuple of bases that we specified. Since bases, in turn, may inherit from other types, all these ancestor types combined form an hierarchy. An hierarchy, hovewer, doesn't specify the order of inheritance, so `type_new()` converts this hierarchy into a list. [The Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO) determines how to perform this conversion. Once the MRO is calculated, it's trivial to implement the inheritance. The `type_new()` function iterates over ancestors according to the MRO. From each ancestor, it copies those slots that haven't been set on the type before. Some slots support the inheritence and some don't. You can check in [the docs](https://docs.python.org/3/c-api/typeobj.html#type-objects) whether a particular slot is inherited or not.
+
+If no bases were specified, `type_new()` assumes that `object` is the only base. This is why all Python types directly or indirectly inherit from `object`.
+
+## Attributes
+
+
+
