@@ -217,12 +217,13 @@ typedef struct {
 } PySequenceMethods;
 ```
 
-A type has a lot of slots (and each slots is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the docs). Among these slots, there should be a slot that performs the addition. After careful inspection of the `PyTypeObject` struct, we find that its `tp_as_number` field points to a group of number-related slots. One of these slots is a binary function called `nb_add`:
+If you count all the slots and sub-slots, you'll get a scary number. Fortunately, each slots is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the Python/C API Reference Manual (I strongly recommend you to bookmark this link). Today we'll cover only a few slots. Nevertheless, it shall give us a general idea of how the slots are used.
+
+Since we're interested in how CPython adds objects, let's find the slots responsible for addition. There must be at least one such slot. After careful inspection of the `PyTypeObject` struct, we find that it has the "number" suite `PyNumberMethods`, and the first slot of this suite is a binary function called `nd_add`:
 
 ```C
 typedef struct {
-    binaryfunc nb_add; // definition of "binaryfunc":
-                       // typedef PyObject * (*binaryfunc)(PyObject *, PyObject *);
+    binaryfunc nb_add; // typedef PyObject * (*binaryfunc)(PyObject *, PyObject *)
     binaryfunc nb_subtract;
     binaryfunc nb_multiply;
     binaryfunc nb_remainder;
@@ -231,7 +232,13 @@ typedef struct {
 } PyNumberMethods;
 ```
 
-It seems that `nb_add` is what we're looking for. Let's see now how the `BINARY_ADD` opcode is implemented and find out if the VM indeed calls `nb_add` to add objects.
+Now we have two question regarding the `nb_add` slot :
+
+* What is it set to?
+
+* How is it used?
+
+I think it's better to start with the second. We should expect that the VM calls `nb_add` to execute the `BINARY_ADD` opcode. So, let's, for a moment, suspend our discussion about types and take a look at how the `BINARY_ADD` opcode is implemented. 
 
 ## BINARY_ADD
 
