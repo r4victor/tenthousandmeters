@@ -4,21 +4,33 @@ Tags: Python behind the scenes, Python, CPython
 
 As we know from the previous parts of this series, the execution of a Python program consists of two major steps:
 
-1. The CPython compiler translates Python code to bytecode.
-2. The CPython VM executes the bytecode.
+1. [The CPython compiler]({filename}/blog/python_bts_02.md) translates Python code to bytecode.
+2. [The CPython VM]({filename}/blog/python_bts_01.md) executes the bytecode.
 
-We've been focusing on the second step for quite a while. In part 4 we've looked at the evaluation loop, a place where the bytecode gets executed. And in part 5 we've studied how the VM executes the instructions that are used to implement variables. What we haven't covered yet is how the VM actually computes something. We postponed this question because to answer it, we first need to understand how the most fundamental part of the language works. Today, we'll study the Python object system.
+We've been focusing on the second step for quite a while. In [part 4]({filename}/blog/python_bts_04.md) we've looked at the evaluation loop, a place where Python bytecode gets executed. And in [part 5]({filename}/blog/python_bts_05.md) we've studied how the VM executes the instructions that are used to implement variables. What we haven't covered yet is how the VM actually computes something. We postponed this question because to answer it, we first need to understand how the most fundamental part of the language works. Today, we'll study the Python object system.
 
 ## Motivation
 
-Let's write a piece of code that computes something.
+Consider an extremely simple piece of Python code:
 
 ```python
 def f(x):
     return x + 7
 ```
 
-The compiler translates the body of the function `f` to the following bytecode:
+To compute the function `f`, CPython must evaluate the expression `x + 7`. The question I'd like to ask is: How does CPython do that? Special methods such as `__add__()` and `__radd__()` probably come to your mind. When we define these methods on a class, the instances of that class can be added using the `+` operator. So, you might think that CPython does something like this:
+
+1. It calls `x.__add__(7)` or `type(x).__add__(x, 7)`.
+2. If `x` doesn't have `__add__()`, or this method fails, it calls `(7).__radd__(x)` or `int.__radd__(7, x)`.
+
+The reality, tough, is a bit more compilcated. What really happens depends on what `x` is. For example, if `x` is an instance of a user-defined class, the algorithm described above resembles the truth. If, however, `x` is an instance of a built-in type, like `int` or `float`, CPython doesn't call any special methods at all.
+
+To learn how some Python code is executed, we can do the following:
+
+1. Dissassemble the code to bytecode.
+2. Study how the VM executes the dissassembled bytecode instructions.
+
+Let's apply this algorithm to the function `f`. The compiler translates its body to the following bytecode:
 
 ```text
 $ python -m dis f.py
@@ -29,31 +41,28 @@ $ python -m dis f.py
               6 RETURN_VALUE
 ```
 
-And the VM executes this bytecode as follows:
+And here's what these bytecode instructions do:
 
-1. It loads the value of the parameter `x` onto the stack.
-2. It loads the constant `7` onto the stack.
-3. It pops the right operand from the stack, peeks the left operand, adds them and replaces the left operand on top of the stack with the result.
-4. It pops the value from the stack and returns it.
+1. `LOAD_FAST` loads the value of the parameter `x` onto the stack.
+2. `LOAD_CONST` loads the constant `7` onto the stack.
+3. `BINARY_ADD` pops two values from the stack, adds them and pushes the result back onto the stack.
+4. `RETURN_VALUE` pops the value from the stack and returns it.
 
-Note that the compiler doesn't know whether `x` is an integer, a float, a list or something else, so it always produces the same `BINARY_ADD` opcode to perform the addition. The VM, therefore, must be able to figure out the right way to add `x` to `7` depending on what `x` is.
+How does the VM add two values? To answer this question, we need to understand what these values are. For us, `7` is an instance of `int` and `x` is, well, anything. For the VM, though, everything is a Python object. All values the VM pushes onto the stack and pops from the stack are pointers to the `PyObject` struct (hence the phrase "Everything in Python is an object").
 
-CPython solves this problem by representing everything in the language as a Python object (hence the phrase "Everything in Python is an object"). So, the VM needs to work only with Python objects, and all values the VM stores on the value stack are pointers to Python objects. The VM doesn't know how to add integers or floats but it knows that any Python object has a type. A type, in turn, knows everything about objects of that type. The `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
+The VM doesn't need to know how to add integers or strings, that is, how to do the arithmetic or concatenate unicode sequences. All it needs to know is that every Python object has a type. A type, in turn, knows everything about its objects. For example, the `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
 
-This simplified explanation captures the essence of the solution, but it also omits a lot of important details. For example, you might think that to add `x` to `7`, the VM simply calls something like `x.__add__(7)`, `type(x).__add__(x, 7)` or `(7).__radd__(x)`, but the reality is a bit more complicated. To get a more realistic picture, we need to understand what Python objects and types really are and how they work.
+This simplified explanation captures the essence of the solution, but it also omits a lot of important details. To get a more realistic picture, we need to understand what Python objects and types really are and how they work.
 
 ## Python objects and types
 
-We've discussed Python objects a little in [part 3]({filename}/blog/python_bts_03.md). This discussion is worth repeating here.    A Python object is:
+We've discussed Python objects a little in [part 3]({filename}/blog/python_bts_03.md). This discussion is worth repeating here.
 
-* an instance of the `PyObject` struct; or
-* an instance of any other struct that extends the `PyObject` struct.
-
-The `PyObject` struct is defined as follows:
+We begin with the definition of the `PyObject` struct:
 
 ```C
 typedef struct _object {
-    _PyObject_HEAD_EXTRA // for debugging purposes only
+    _PyObject_HEAD_EXTRA // macro, for debugging purposes only
     Py_ssize_t ob_refcnt;
     PyTypeObject *ob_type;
 } PyObject;
@@ -64,21 +73,18 @@ It has two members:
 * a reference count ` ob_refcnt` that CPython uses for garbage collection; and
 * a pointer to the object's type `ob_type`.
 
-Instances of the `PyObject` struct are useless because they don't store any value. All other Python objects that actually store something are defined by extending `PyObject`. A struct extends `PyObject` if:
+We saw that the VM treats any Python object as `PyObject`. How is that possible? The C programming languge has no notion of classes and inheritance. Nevertheless, it's possible to implement in C something that can be called a single inheritance. The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. So, we can "extend" `PyObject` by defining a new struct whose first member is `PyObject`.
 
-* its first member is `PyObject`; or
-* its first member is another struct that extends `PyObject`.
-
-The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. Since any Python object extends `PyObject`, CPython can treat any Python object as `PyObject`. It's easy to understand with an example. Here's how CPython defines the `float` object:
+Here's, for example, how the `float` object is defined:
 
 ```C
 typedef struct {
-    PyObject_HEAD // macro that expands to "PyObject ob_base;"
+    PyObject ob_base; // expansion of PyObject_HEAD macro
     double ob_fval;
 } PyFloatObject;
 ```
 
-The C standard simply states that we can convert a pointer to `PyFloatObject` to a pointer to `PyObject` and vice versa:
+A `float` object stores everything `PyObject` stores plus the floating-point value `ob_fval`. The C standard simply states that we can convert a pointer to `PyFloatObject` to a pointer to `PyObject` and vice versa:
 
 ```C
 PyFloatObject float_object;
@@ -87,19 +93,13 @@ PyObject *obj_ptr = (PyObject *)&float_object;
 PyFloatObject *float_obj_ptr = (PyFloatObject *)obj_ptr;
 ```
 
-The VM treats every Python object as `PyObject` because the only thing it needs to access is the object's type. A type is also a Python object, an instance of the `PyTypeObject` struct:
+The reason why the VM treats every Python object as `PyObject` is because all it needs to access is the object's type. A type is also a Python object, an instance of the `PyTypeObject` struct:
 
 ```C
 // PyTypeObject is a typedef for "struct _typeobject"
+
 struct _typeobject {
-    PyObject_VAR_HEAD // macro that expands to "PyVarObject ob_base;"
-                      //
-                      // definition of PyVarObject:
-                      // typedef struct {
-                      //     PyObject ob_base;
-                      //     Py_ssize_t ob_size; /* Number of items in variable part */          
-                      // } PyVarObject;
-    
+    PyVarObject ob_base; // expansion of PyObject_VAR_HEAD macro
     const char *tp_name; /* For printing, in format "<module>.<name>" */
     Py_ssize_t tp_basicsize, tp_itemsize; /* For allocation */
 
@@ -182,13 +182,24 @@ struct _typeobject {
 };
 ```
 
-A type determines how the objects of that type behave. Each `tp_*` member of a type, called slot, is responsible for a particular aspect of the object's behavior. Here's some examples:
+Note that the first member of a type is not `PyObject` but `PyVarObject`, which is defines as follows:
+
+```C
+typedef struct {
+    PyObject ob_base;
+    Py_ssize_t ob_size; /* Number of items in variable part */
+} PyVarObject;
+```
+
+Nevertheless, since the first member of `PyVarObject` is `PyObject`, a pointer to a type can still be converted to a pointer to `PyObject`.
+
+So, what is a type and why it has so many members? A type determines how the objects of that type behave. Each member of a type, called slot, is responsible for a particular aspect of the object's behavior. For example:
 
 * `tp_new` is a pointer to a function that creates new objects of the type.
 * `tp_str` is a pointer to a function that implements  `str()` for objects of the type.
 * `tp_hash` is a pointer to a function that implements  `hash()` for objects of the type.
 
-Some slots, called sub-slots, are grouped together in structs. For example, the `PySequenceMethods` struct contains the sub-slots that implement the sequence protocol:
+Some slots, called sub-slots, are grouped together in suites. A suite is just a stuct that contains related slots. For example, the `PySequenceMethods` struct is a suite of sub-slots that implement the sequence protocol:
 
 ```C
 typedef struct {
@@ -333,7 +344,7 @@ The `binary_op1()` function takes an offset of a number slot as a parameter (in 
 
 3. Otherwise, call the slot of the left operand.
 
-The reason to always call the slot of a subtype is to allow the subtypes to override the behaviour of their ancestors:
+The reason to prioritize the slot of a subtype is to allow the subtypes to override the behavior of their ancestors:
 
 ```pycon
 $ python -q
@@ -638,7 +649,7 @@ static slotdef slotdefs[] = {
 }
 ```
 
-What's important here is that `function` of both entries is `slot_nb_add()`. When we define the `__add__()` method on a class, `update_one_slot()` finds it and sets the `nb_add` slot of the class to the `slot_nb_add()` function. Similarly, when we define the `__radd__()` method, `update_one_slot()` sets `nb_add` to `slot_nb_add()` as well. Note that when several special methods map to the same slot, they must agree an `function`.
+What's important here is that `function` of both entries is `slot_nb_add()`. When we define the `__add__()` method on a class, `update_one_slot()` finds it and sets the `nb_add` slot of the class to the `slot_nb_add()` function. Similarly, when we define the `__radd__()` method, `update_one_slot()` sets `nb_add` to `slot_nb_add()` as well. Note that when several special methods map to the same slot, they must agree on `function`.
 
 Now, what is `slot_nb_add()`, you ask? This function is defined with a macro that expands as follows:
 
@@ -738,5 +749,8 @@ If no bases were specified, `type_new()` assumes that `object` is the only base.
 
 ## Attributes
 
+The MRO plays two roles:
 
+* It's the order of slot inheritance.
+* It's the order of attribute lookup.
 
