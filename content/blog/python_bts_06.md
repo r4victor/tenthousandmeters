@@ -481,7 +481,7 @@ Dynamically allocated types are the types we define using the `class` statement.
 
 From the programmer's perspective, it's easier to define a class in Python than a type in C. This is because CPython does a lot of things behind the scenes when it creates a class. Let's see what's involved in this process.
 
-If we wouldn't know where to start, we could apply the familiar method
+If we wouldn't know where to start, we could apply the familiar method:
 
 &nbsp;1\. Define a simple class
 ```python
@@ -494,9 +494,9 @@ $ python -m dis class_A.py
 ```
 &nbsp;3\. Study how the VM executes the produced bytecode instructions.
 
-Feel free to do that if you find the time. Right now, we'll take a shortcut.
+Feel free to do that if you find the time, or read [the article on classes](https://eli.thegreenplace.net/2012/06/15/under-the-hood-of-python-class-definitions) by Eli Bendersky. We'll take a shortcut.
 
-To create a Python object we call its type, e.g. `int()`, `list()` or `MyClass()`. Similarly, to create a type object, we call a type. Such a type whose instances are types is called a metatype. Python has one built-in metatype called `PyType_Type`, which is known to programmers simply as `type`. Here's how it's defined:
+To create a Python object we call its type, e.g. `int()`, `list()` or `MyClass()`. To create a type object, we call a type as well. Such a type whose instances are types is called a metatype. Python has one built-in metatype called `PyType_Type`, which is known to programmers simply as `type`. Here's how it's defined:
 
 ```C
 PyTypeObject PyType_Type = {
@@ -550,7 +550,7 @@ All built-in types point to `type` as their type. So, `type` determines how buil
 1. It calls `tp_new` of a type to create an object.
 2. It calls `tp_init` of a type to initialize the created object.
 
-The type of `type` is `type` itself (take a look at the definition above). So, when we call `type()`, the `type_call()` function is invoked. It checks for the special case when we pass a single argument. In this case, `type_call()` simply returns the type of the passed object:
+The type of `type` is `type` itself (take a look at the definition above). So, when we call `type()`, the `type_call()` function is invoked. It checks for the special case when we pass a single argument to `type()`. In this case, `type_call()` simply returns the type of the passed object:
 
 ```pycon
 $ python -q
@@ -562,90 +562,42 @@ $ python -q
 <class 'type'>
 ```
 
-But when we pass three arguments to `type()`, `type_call()` creates a new type by calling the `tp_new` and `tp_init` slots of `type` as described above.
-
-...
-
-The compiler translates this class definition to the following bytecode:
-
-```text
-$ python -m dis class.py      
-  1           0 LOAD_BUILD_CLASS
-              2 LOAD_CONST               0 (<code object A at 0x108d82240, file "class.py", line 1>)
-              4 LOAD_CONST               1 ('A')
-              6 MAKE_FUNCTION            0
-              8 LOAD_CONST               1 ('A')
-             10 CALL_FUNCTION            2
-             12 STORE_NAME               0 (A)
-...
-```
-
-And here's what this bytecode does:
-
-1. `LOAD_BUILD_CLASS` pushes the  `__build_class__()` function from the `builtins` module onto the stack.
-2. `MAKE_FUNCTION` takes the code object of the class, turns it into a function and pushes this function onto the stack.
-3. `CALL_FUNCTION` calls `__build_class__()` with two arguments: the function from the previous step and the name of the class. The result of this call is a class that is pushed onto the stack.
-4. `STORE_NAME` pops the class from the stack and stores it under the name `A`.
-
-The job of the `__build_class__()` is to find the right metatype and then call this metatype with appropriate arguments to create a class. A metatype is a type whose instances are types. An example of a metatype is `PyType_Type`, known in Python as `type`. This metatype is the type of all built-in types and the default type for classes. The type of `type` is `type` itself. The following example demonstrates the point:
+But when we pass three arguments to `type()`, `type_call()` creates a new type by calling the `tp_new` and `tp_init` slots of `type` as described above. The following example demonstrates this usage of `type()`:
 
 ```pycon
 $ python -q
->>> type(1)
-<class 'int'>
->>> type(int)
-<class 'type'>
->>> type(type)
-<class 'type'>
->>> 
->>> class A: pass
-... 
->>> type(A)
-<class 'type'>
+>>> MyClass = type('MyClass', (), {'__str__': lambda self: 'Hey!'})
+>>> instance_of_my_class = MyClass()
+>>> str(instance_of_my_class)
+Hey!
 ```
 
-A metatype determines the behavior of types. In particular, it's responsible for the creation of classes. To create a new class, we call a metatype with three arguments:
+The arguments we pass to `type()` are:
 
 1. the name of a class
-2. a tuple of its bases
-3. its namespace.
+2. a tuple of its bases; and
+3. a namespace.
 
-Bases are types from which a class inherits. If bases are not specified, `PyBaseObject_Type`, known in Python as `object`, is used as a base. Every Python type directly or indirectly inherits from `object`. The `object` type implements the behavior that every Python type is expected to have. For example, it implements `tp_alloc`, `tp_init` and `tp_repr` slots.
+Other metatypes take arguments in this form as well. 
 
-A namespace is a dictionary that serves as a prototype for the dictionary of a class. To populate the namespace, `__build_class__()` executes the class body, which it got as the first parameter, in the namespace. The names defined in the class body later become attributes of the class. Typically, a namespace starts as an empty dictionary, but if the metatype implements the [`__prepare__`](https://docs.python.org/3/reference/datamodel.html#preparing-the-class-namespace) method, this method is called to prepare the namespace.
+We saw that we can create a class by calling `type()`, but that's not what we typically do. Typically, we use the `class` statement to define a class. It turns out that in this case too the VM eventually calls some metatype, and most often it calls `type()`. 
 
-Let's summarize what `__build_class__()` does:
+To execute the `class` statement, the VM calls the  `__build_class__()` function from the `builtins` module. What this function does can be summarized as follows:
 
-1. It determines the metatype that will be used to create a class.
-2. It initializes the empty namespace or calls metatype's `__prepare__`.
-3. It executes the body of the class in the namespaces.
-4. It calls the metatype to create the class.
+1. Decide which metatype to call to create the class.
+2. [Prepare](https://docs.python.org/3/reference/datamodel.html#preparing-the-class-namespace) the namespace. The namespace will be used as a class's dictionary.
+3. Execute the body of the class in the namespace, thus filling the namespace.
+4. Call the metatype.
 
-Python allows to specifiy which metatype should be used to create a class with the `metaclass` keyword:
+We can instruct `__build_class__()` which metatype it should call using the `metaclass` keyword. If no `metaclass` is specified, `__build_class__()` calls `type()` by default. It also takes metatypes of bases into account. The exact logic of choosing the metatype is nicely [described](https://docs.python.org/3/reference/datamodel.html#determining-the-appropriate-metaclass) in the docs.
 
-```python
-class A(metaclass=MyMetatype):
-  pass
-```
+Suppose we define a new class and do not specify `metaclass`. Where does the class actually get created? In this case, `__build_class__()` calls `type()`. This invokes the `type_call()` function that, in turn, calls the `tp_new` and `tp_init` slots of `type`. The `tp_new` slot of `type` points to the `type_new()` function. This is the function that creates classes. The `tp_init` slot of `type` points to the function that does nothing, so all the work is done by `type_new()`.
 
-How exactly `__build_class__()` determines the metatype is nicely [described](https://docs.python.org/3/reference/datamodel.html#determining-the-appropriate-metaclass) in the docs:
+The `type_new()` function is nearly 500 lines long and probably deserves a separate post.
 
-> The appropriate metaclass for a class definition is determined as follows:
->
-> - if no bases and no explicit metaclass are given, then [`type()`](https://docs.python.org/3/library/functions.html#type) is used;
-> - if an explicit metaclass is given and it is *not* an instance of [`type()`](https://docs.python.org/3/library/functions.html#type), then it is used directly as the metaclass;
-> - if an instance of [`type()`](https://docs.python.org/3/library/functions.html#type) is given as the explicit metaclass, or bases are defined, then the most derived metaclass is used.
->
-> The most derived metaclass is selected from the explicitly specified metaclass (if any) and the metaclasses (i.e. `type(cls)`) of all specified base classes. The most derived metaclass is one which is a subtype of *all* of these candidate metaclasses. If none of the candidate metaclasses meets that criterion, then the class definition will fail with `TypeError`.
+...
 
-As we can see the metatype defaults to `type`. So, typically, `__build_class__()` calls `type` to create a class. A Python object is callable when its type implements the `tp_call` slot. The type of `type` is `type` itself, and its `tp_call` slot points to the `type_call()` function. This function is invoked when we call any type whose metatype is `type`, not just `type` itself, that is, when we call `type()`, `str()`, `list()` or `MyClass()`. The result of such a call is a new object of the called type.
-
-What `type_call` does is essentialy two things:
-
-1. It calls `tp_new` of a type to create an object.
-2. It calls `tp_init` of a type to initialize the created object.
-
-The `tp_new` slot of `type` points to the `type_new()` function. This is the function that creates classes. The `tp_init` slot of `type` points to the function that does nothing, so all the work is done by `type_new()`. The `type_new()` function is nearly 500 lines long and probably deserves a separate post. Recall that we started our disscussion about classes because we wanted to understand how their slots are set, in particular, the `nb_add` slot. So, for now, let's concentrate on this issue.
+Recall that we started our disscussion about classes because we wanted to understand how their slots are set, in particular, the `nb_add` slot. So, for now, let's concentrate on this issue.
 
 What `type_new()` does can roughly be summarized as follows:
 
