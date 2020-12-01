@@ -21,7 +21,7 @@ def f(x):
 To compute the function `f`, CPython must evaluate the expression `x + 7`. The question I'd like to ask is: How does CPython do that? Special methods such as `__add__()` and `__radd__()` probably come to your mind. When we define these methods on a class, the instances of that class can be added using the `+` operator. So, you might think that CPython does something like this:
 
 1. It calls `x.__add__(7)` or `type(x).__add__(x, 7)`.
-2. If `x` doesn't have `__add__()`, or this method fails, it calls `(7).__radd__(x)` or `int.__radd__(7, x)`.
+2. If `x` doesn't have `__add__()`, or if this method fails, it calls `(7).__radd__(x)` or `int.__radd__(7, x)`.
 
 The reality, tough, is a bit more compilcated. What really happens depends on what `x` is. For example, if `x` is an instance of a user-defined class, the algorithm described above resembles the truth. If, however, `x` is an instance of a built-in type, like `int` or `float`, CPython doesn't call any special methods at all.
 
@@ -30,7 +30,7 @@ To learn how some Python code is executed, we can do the following:
 1. Dissassemble the code to bytecode.
 2. Study how the VM executes the dissassembled bytecode instructions.
 
-Let's apply this algorithm to the function `f`. The compiler translates its body to the following bytecode:
+Let's apply this algorithm to the function `f`. The compiler translates the body of the function to the following bytecode:
 
 ```text
 $ python -m dis f.py
@@ -182,7 +182,7 @@ struct _typeobject {
 };
 ```
 
-Note that the first member of a type is not `PyObject` but `PyVarObject`, which is defines as follows:
+Note that the first member of a type is not `PyObject` but `PyVarObject`, which is defined as follows:
 
 ```C
 typedef struct {
@@ -217,7 +217,7 @@ typedef struct {
 } PySequenceMethods;
 ```
 
-If you count all the slots and sub-slots, you'll get a scary number. Fortunately, each slots is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the Python/C API Reference Manual (I strongly recommend you to bookmark this link). Today we'll cover only a few slots. Nevertheless, it shall give us a general idea of how the slots are used.
+If you count all the slots and sub-slots, you'll get a scary number. Fortunately, each slot is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the Python/C API Reference Manual (I strongly recommend you to bookmark this link). Today we'll cover only a few slots. Nevertheless, it shall give us a general idea of how the slots are used.
 
 Since we're interested in how CPython adds objects, let's find the slots responsible for addition. There must be at least one such slot. After careful inspection of the `PyTypeObject` struct, we find that it has the "number" suite `PyNumberMethods`, and the first slot of this suite is a binary function called `nd_add`:
 
@@ -232,7 +232,7 @@ typedef struct {
 } PyNumberMethods;
 ```
 
-Now we have two question regarding the `nb_add` slot :
+It seems that the `nb_add` slot is what we're looking for. And two questions naturally arise regarding that slot:
 
 * What is it set to?
 
@@ -385,11 +385,18 @@ A type can support the `+` operator either by defining `nb_add` or by defining `
 
 Built-in types such as `int` and `float` implement `nb_add`, and built-in types such as `str` and `list` implement `sq_concat`. Technically, there's no much difference. The main reason to choose one slot over another is to indicate the appropriate meaning. In fact, the `sq_concat` slot is so unnecessary that it's set to `NULL` for all user-defined types (i.e. classes).
 
-We assured ourselves that the VM calls the `nb_add` slot to perfrom the addition. Let's see now how different types implement this slot.
+In this section we saw how the `nb_add` slot is used. The next step is to see what it set to.
 
 ## How slots are set
 
-The way the slots of a type are set depends on how that type is created. There are two ways to create a type object:
+Since addition is a different operation for different types, the `nb_add` slot of a type must be one of two things:
+
+* it's either a type-specific function that adds object of that type; or
+* it's a type-agnostic function that calls some type-specific functions, such as type's `__add__()` special method.
+
+It's indeed one of these two, and which one depends on the type. For example, built-in types such as `int` and `float` have their own implementations of `nb_add`. In constrast, all classes share the same implementation. Fundamentaly, built-in types and classes are the same thing – instances of `PyTypeObject`. The important difference between them is how they are created. This difference effects the way the slots are set, so we should discuss it.
+
+There are two ways to create a type object:
 
 * by statically defining it; or
 * by dynamically allocating it.
@@ -441,7 +448,7 @@ PyTypeObject PyFloat_Type = {
 };
 ```
 
-The slots of a statically defined type are specified explicitly. We can easily see how the `float` type implements `nb_add` by looking at the number slots:
+The slots of a statically defined type are specified explicitly. We can easily see how the `float` type implements `nb_add` by looking at the "number" suite:
 
 ```C
 static PyNumberMethods float_as_number = {
@@ -452,7 +459,7 @@ static PyNumberMethods float_as_number = {
 };
 ```
 
-where we find `float_add`, a straightforward implementation:
+where we find the `float_add()` function, a straightforward implementation of `nb_add`:
 
 ```C
 static PyObject *
@@ -466,16 +473,98 @@ float_add(PyObject *v, PyObject *w)
 }
 ```
 
-The floating-point arithmetic is not that important for our discussion. What's important is that we learned how the VM evaluates the expression `x + 7` when the type of `x` is a built-in type and, furthermore, we learned how the behaviour of a built-in type is specified.
+The floating-point arithmetic is not that important for our discussion. This example demonstrates how to specify the behavior of a statically defined type. It turned out to be quite easy: just write the implementation of slots and point each slot to the corresponding implementation.
 
 ### Dynamically allocated types
 
-Python allows programmers to define their own types using the `class` statement. A Python class is just a dynamically allocated instance of `PyTypeObject`. To see this, let's define a simple class:
+Dynamically allocated types are the types we define using the `class` statement. As we've already said, they are instances of `PyTypeObject`, just like statically defined types. Traditionally, we call them classes but we might call them user-defined types as well.
 
+From the programmer's perspective, it's easier to define a class in Python than a type in C. This is because CPython does a lot of things behind the scenes when it creates a class. Let's see what's involved in this process.
+
+If we wouldn't know where to start, we could apply the familiar method
+
+&nbsp;1\. Define a simple class
 ```python
 class A:
     pass
 ```
+&nbsp;2\. Run the disassembler:
+```text
+$ python -m dis class_A.py
+```
+&nbsp;3\. Study how the VM executes the produced bytecode instructions.
+
+Feel free to do that if you find the time. Right now, we'll take a shortcut.
+
+To create a Python object we call its type, e.g. `int()`, `list()` or `MyClass()`. Similarly, to create a type object, we call a type. Such a type whose instances are types is called a metatype. Python has one built-in metatype called `PyType_Type`, which is known to programmers simply as `type`. Here's how it's defined:
+
+```C
+PyTypeObject PyType_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    "type",                                     /* tp_name */
+    sizeof(PyHeapTypeObject),                   /* tp_basicsize */
+    sizeof(PyMemberDef),                        /* tp_itemsize */
+    (destructor)type_dealloc,                   /* tp_dealloc */
+    offsetof(PyTypeObject, tp_vectorcall),      /* tp_vectorcall_offset */
+    0,                                          /* tp_getattr */
+    0,                                          /* tp_setattr */
+    0,                                          /* tp_as_async */
+    (reprfunc)type_repr,                        /* tp_repr */
+    0,                                          /* tp_as_number */
+    0,                                          /* tp_as_sequence */
+    0,                                          /* tp_as_mapping */
+    0,                                          /* tp_hash */
+    (ternaryfunc)type_call,                     /* tp_call */
+    0,                                          /* tp_str */
+    (getattrofunc)type_getattro,                /* tp_getattro */
+    (setattrofunc)type_setattro,                /* tp_setattro */
+    0,                                          /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
+    Py_TPFLAGS_BASETYPE | Py_TPFLAGS_TYPE_SUBCLASS |
+    Py_TPFLAGS_HAVE_VECTORCALL,                 /* tp_flags */
+    type_doc,                                   /* tp_doc */
+    (traverseproc)type_traverse,                /* tp_traverse */
+    (inquiry)type_clear,                        /* tp_clear */
+    0,                                          /* tp_richcompare */
+    offsetof(PyTypeObject, tp_weaklist),        /* tp_weaklistoffset */
+    0,                                          /* tp_iter */
+    0,                                          /* tp_iternext */
+    type_methods,                               /* tp_methods */
+    type_members,                               /* tp_members */
+    type_getsets,                               /* tp_getset */
+    0,                                          /* tp_base */
+    0,                                          /* tp_dict */
+    0,                                          /* tp_descr_get */
+    0,                                          /* tp_descr_set */
+    offsetof(PyTypeObject, tp_dict),            /* tp_dictoffset */
+    type_init,                                  /* tp_init */
+    0,                                          /* tp_alloc */
+    type_new,                                   /* tp_new */
+    PyObject_GC_Del,                            /* tp_free */
+    (inquiry)type_is_gc,                        /* tp_is_gc */
+};
+```
+
+All built-in types point to `type` as their type. So, `type` determines how built-in types behave. For example, what happens when we call a type, like `int()` or `MyClass()`, is specified by the `tp_call` slot of `type`. This slot points to the `type_call()` function that essentially does two things:
+
+1. It calls `tp_new` of a type to create an object.
+2. It calls `tp_init` of a type to initialize the created object.
+
+The type of `type` is `type` itself (take a look at the definition above). So, when we call `type()`, the `type_call()` function is invoked. It checks for the special case when we pass a single argument. In this case, `type_call()` simply returns the type of the passed object:
+
+```pycon
+$ python -q
+>>> type(3)
+<class 'int'>
+>>> type(int)
+<class 'type'>
+>>> type(type)
+<class 'type'>
+```
+
+But when we pass three arguments to `type()`, `type_call()` creates a new type by calling the `tp_new` and `tp_init` slots of `type` as described above.
+
+...
 
 The compiler translates this class definition to the following bytecode:
 
