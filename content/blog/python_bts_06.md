@@ -48,7 +48,7 @@ And here's what these bytecode instructions do:
 3. `BINARY_ADD` pops two values from the stack, adds them and pushes the result back onto the stack.
 4. `RETURN_VALUE` pops the value from the stack and returns it.
 
-How does the VM add two values? To answer this question, we need to understand what these values are. For us, `7` is an instance of `int` and `x` is, well, anything. For the VM, though, everything is a Python object. All values the VM pushes onto the stack and pops from the stack are pointers to the `PyObject` struct (hence the phrase "Everything in Python is an object").
+How does the VM add two values? To answer this question, we need to understand what these values are. For us, `7` is an instance of `int` and `x` is, well, anything. For the VM, though, everything is a Python object. All values the VM pushes onto the stack and pops from the stack are pointers to `PyObject` structs (hence the phrase "Everything in Python is an object").
 
 The VM doesn't need to know how to add integers or strings, that is, how to do the arithmetic or concatenate unicode sequences. All it needs to know is that every Python object has a type. A type, in turn, knows everything about its objects. For example, the `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
 
@@ -73,7 +73,7 @@ It has two members:
 * a reference count ` ob_refcnt` that CPython uses for garbage collection; and
 * a pointer to the object's type `ob_type`.
 
-We saw that the VM treats any Python object as `PyObject`. How is that possible? The C programming languge has no notion of classes and inheritance. Nevertheless, it's possible to implement in C something that can be called a single inheritance. The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. So, we can "extend" `PyObject` by defining a new struct whose first member is `PyObject`.
+We said that the VM treats any Python object as `PyObject`. How is that possible? The C programming languge has no notion of classes and inheritance. Nevertheless, it's possible to implement in C something that can be called a single inheritance. The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. So, we can "extend" `PyObject` by defining a new struct whose first member is `PyObject`.
 
 Here's, for example, how the `float` object is defined:
 
@@ -217,7 +217,7 @@ typedef struct {
 } PySequenceMethods;
 ```
 
-If you count all the slots and sub-slots, you'll get a scary number. Fortunately, each slot is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the Python/C API Reference Manual (I strongly recommend you to bookmark this link). Today we'll cover only a few slots. Nevertheless, it shall give us a general idea of how the slots are used.
+If you count all the slots and sub-slots, you'll get a scary number. Fortunately, each slot is very well [documented](https://docs.python.org/3/c-api/typeobj.html) in the Python/C API Reference Manual (I strongly recommend you to bookmark this link). Today we'll cover only a few slots. Nevertheless, it shall give us a general idea of how slots are used.
 
 Since we're interested in how CPython adds objects, let's find the slots responsible for addition. There must be at least one such slot. After careful inspection of the `PyTypeObject` struct, we find that it has the "number" suite `PyNumberMethods`, and the first slot of this suite is a binary function called `nd_add`:
 
@@ -232,7 +232,7 @@ typedef struct {
 } PyNumberMethods;
 ```
 
-It seems that the `nb_add` slot is what we're looking for. And two questions naturally arise regarding that slot:
+It seems that the `nb_add` slot is what we're looking for. Two questions naturally arise regarding this slot:
 
 * What is it set to?
 
@@ -593,18 +593,12 @@ We can instruct `__build_class__()` which metatype it should call using the `met
 
 Suppose we define a new class and do not specify `metaclass`. Where does the class actually get created? In this case, `__build_class__()` calls `type()`. This invokes the `type_call()` function that, in turn, calls the `tp_new` and `tp_init` slots of `type`. The `tp_new` slot of `type` points to the `type_new()` function. This is the function that creates classes. The `tp_init` slot of `type` points to the function that does nothing, so all the work is done by `type_new()`.
 
-The `type_new()` function is nearly 500 lines long and probably deserves a separate post.
+The `type_new()` function is nearly 500 lines long and probably deserves a separate post. Its essence, though, can be briefly summarized as follows:
 
-...
+1. Allocate new type object.
+2. Set up the allocated type object.
 
-Recall that we started our disscussion about classes because we wanted to understand how their slots are set, in particular, the `nb_add` slot. So, for now, let's concentrate on this issue.
-
-What `type_new()` does can roughly be summarized as follows:
-
-1. Allocate `PyHeapTypeObject`.
-2. Set type's slots.
-
-`PyHeapTypeObject` is a struct that extends `PyTypeObject`. It contains `PyTypeObject` as well as structs with sub-slots:
+To accomplish the first step, `type_new()` must allocate an instance of `PyTypeObject` as well as suites. Suites must be allocated separately from `PyTypeObject` because `PyTypeObject` contains only pointers to suites, not suites themselves. To handle this inconvenience, `type_new()` allocates an instance of the `PyHeapTypeObject` struct that extends `PyTypeObject` and contains the suites:
 
 ```C
 /* The *real* layout of a type object when allocated on the heap */
@@ -622,13 +616,75 @@ typedef struct _heaptypeobject {
 } PyHeapTypeObject;
 ```
 
-`PyTypeObject` doesn't contain structs with sub-slots, only pointers to them, so it makes sense to have `PyHeapTypeObject` to allocate everything at once.
+To set up a type object effectively means to set up its slots. This is what `type_new()` does for the most part.
 
-The next step is to set the slots of the allocated type. What would you expect `nb_add` of a class to be? We know that we can define special methods such as `__add__()` and `__radd__()` to specify how to add objects of a class. But what's the connection between special methods and slots? That's the ultimate question of our investigation.
+## Type initialization
+
+Before any type can be used, it should be initialized with the `PyType_Ready()` function. For a class, `PyType_Ready()` is called by `type_new()`. For a statically defined type, `PyType_Ready()` must be called explicitly. When CPython starts,  it calls `PyType_Ready()` for each built-in type.
+
+The `PyType_Ready()` function does a number of things. For example, it does slot inheritance. 
+
+## Slot inheritance
+
+When we define a class that inherits from other type, we expect that class to inherit some behavior of that type. For example, when we define a class that inherits from `int`, we expect it to support the addition:
+
+```pycon
+$ python -q
+>>> class MyInt(int):
+...     pass
+... 
+>>> x = MyInt(2)
+>>> y = MyInt(4)
+>>> x + y
+6
+```
+
+Does `MyInt` inherit the `nb_add` slot of `int`? Yes, it does. It's pretty straightforward to inherit the slots from a single ancestor: just copy those slots that the class doesn't have. It's a little bit more compicated when a class has multiple bases. Since bases, in turn, may inherit from other types, all these ancestor types combined form an hierarchy. The problem with the hierarchy is that it doesn't specify the order of inheritance. To solve this problem, `PyType_Ready()` converts this hierarchy into a list. [The Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO) determines how to perform this conversion. Once the MRO is calculated, it becomes easy to implement the inheritance in the general case. The `PyType_Ready()` function iterates over ancestors according to the MRO. From each ancestor, it copies those slots that haven't been set on the type before. Some slots support the inheritence and some don't. You can check in [the docs](https://docs.python.org/3/c-api/typeobj.html#type-objects) whether a particular slot is inherited.
+
+In contrast to a class, a statically defined type can specify at most one base. This is done by implementing the `tp_base` slot.
+
+If no bases for a type are specified, `PyType_Ready()` assumes that the `object` type is the only base. Every type directly or indirectly inherits from `object`. Why? Because it implements the slots that every type is expected to have. For example, it implements `tp_alloc`, `tp_init` and `tp_repr` slots.
+
+## The question
+
+So far we've seen two ways in which a slot can be set:
+
+* It can be specified explicitly (if a type is a statically defined type).
+* It can be inherited from an ancestor.
+
+It's still unclear how slots of a class are connected to its special methods. Moreover, we have a reverse problem for built-in types. How do they implement special methods? They certainly do:
+
+```pycon
+$ python -q
+>>> (3).__add__(4)
+7
+```
+
+We come to the ultimate question of this post: What's the connection between special methods and slots?
 
 ## Special methods and slots
 
-It turns out that CPython keeps a mapping between special methods and slots. This mapping is represented by an array of `slotdef` structs. Each `slotdef` struct contains the name of a special method, the offset of the corresponding slot in the `PyHeapTypeObject` struct, a poiner to the slot's default function and some other things:
+The answer lies in the fact that CPython keeps a mapping between special methods and slots. This mapping is represented by the `slotdefs` array. It looks like this:
+
+```C
+#define TPSLOT(NAME, SLOT, FUNCTION, WRAPPER, DOC) \
+    {NAME, offsetof(PyTypeObject, SLOT), (void *)(FUNCTION), WRAPPER, \
+     PyDoc_STR(DOC)}
+
+static slotdef slotdefs[] = {
+    TPSLOT("__getattribute__", tp_getattr, NULL, NULL, ""),
+    TPSLOT("__getattr__", tp_getattr, NULL, NULL, ""),
+    TPSLOT("__setattr__", tp_setattr, NULL, NULL, ""),
+    TPSLOT("__delattr__", tp_setattr, NULL, NULL, ""),
+    TPSLOT("__repr__", tp_repr, slot_tp_repr, wrap_unaryfunc,
+           "__repr__($self, /)\n--\n\nReturn repr(self)."),
+    TPSLOT("__hash__", tp_hash, slot_tp_hash, wrap_hashfunc,
+           "__hash__($self, /)\n--\n\nReturn hash(self)."),
+    // ... more slotdefs
+}
+```
+
+ Each entry of this array is a `slotdef` struct:
 
 ```C
 // typedef struct wrapperbase slotdef;
@@ -644,32 +700,32 @@ struct wrapperbase {
 };
 ```
 
-And here's how the mapping is defined:
+Four members of this struct are important for our discussion:
 
-```C
-#define TPSLOT(NAME, SLOT, FUNCTION, WRAPPER, DOC) \
-    {NAME, offsetof(PyTypeObject, SLOT), (void *)(FUNCTION), WRAPPER, \
-     PyDoc_STR(DOC)}
+* `name`  is a name of a special method.
+* `offset` is an offset of a slot in the `PyHeapTypeObject` struct. It specifies the slot corresponding to the special method.
+* `function` is an implementation of a slot. When a special method is defined, the corresponding slot is set to `function`. Typically, `function` calls special methods to do the work.
+* `wrapper` is a wrapper function around a slot. When a slot is specified, `wrapper` provides an implementation for the corresponding special method. It calls the slot to do the work.
 
-static slotdef slotdefs[] = {
-  TPSLOT("__getattribute__", tp_getattr, NULL, NULL, ""),
-  TPSLOT("__getattr__", tp_getattr, NULL, NULL, ""),
-  TPSLOT("__setattr__", tp_setattr, NULL, NULL, ""),
-  TPSLOT("__delattr__", tp_setattr, NULL, NULL, ""),
-  TPSLOT("__repr__", tp_repr, slot_tp_repr, wrap_unaryfunc,
-         "__repr__($self, /)\n--\n\nReturn repr(self)."),
-  TPSLOT("__hash__", tp_hash, slot_tp_hash, wrap_hashfunc,
-         "__hash__($self, /)\n--\n\nReturn hash(self)."),
-  // ... more slotdefs
-}
+Here's, for example, an entry that maps `__add__()` special method to the `nb_add` slot:
 
-```
+* `name` is `"__add__"`.
+* `offset` is `offsetof(PyHeapTypeObject, as_number.nb_add)`.
+* `function` is `slot_nb_add()`.
+* `wrapper` is `wrap_binaryfunc_l()`.
 
-This is not a one-to-one mapping. For example, both `__add__()` and `__radd__()` special methods map to the same `nb_add` slot. Conversely, both the `mp_subscript` mapping slot and the `sq_item` sequence slot map to the same `__getitem__()` special method.
+The `slotdefs` array is a many-to-many mapping. For example, as we'll see, both `__add__()` and `__radd__()` special methods map to the same `nb_add` slot. Conversely, both the `mp_subscript` "mapping" slot and the `sq_item` "sequence" slot map to the same `__getitem__()` special method.
 
-CPython uses the `slotdefs` array to set the slots of a class. The `type_new()` function calls `fixup_slot_dispatchers()` to do that. The latter calls `update_one_slot()` for each struct in `slotdefs`. This function looks up the special method corresponding to struct's `name` in the class. For example, if struct's `name` is `"__add__"`, it looks up `A.__add__`. If it finds such a method, it sets the slot specified by struct's `offset` to the function specified by struct's `function`.
+CPython uses the `slotdefs` array in two ways:
 
-Let's see how the `nb_add` slot is set. It corresponds to the following `slotdefs` entries:
+* to set slots based on special methods; and
+* to set special methods based on slots.
+
+## Slots based on special methods
+
+The `type_new()` function calls `fixup_slot_dispatchers()` to set slots based on special methods. The `fixup_slot_dispatchers()` function calls `update_one_slot()` for each slot in the `slotdefs` array. And `update_one_slot()` sets the slot to `function` if a class has the corresponding special method.
+
+Let's take the `nb_slot` for example. The `slotdefs` array has two entries corresponding to that slot:
 
 ```C
 static slotdef slotdefs[] = {
@@ -680,7 +736,7 @@ static slotdef slotdefs[] = {
 }
 ```
 
-that expand to:
+`BINSLOT()` and `RBINSLOT()` are macros. Let's expand them:
 
 ```C
 static slotdef slotdefs[] = {
@@ -697,7 +753,7 @@ static slotdef slotdefs[] = {
 }
 ```
 
-What's important here is that `function` of both entries is `slot_nb_add()`. When we define the `__add__()` method on a class, `update_one_slot()` finds it and sets the `nb_add` slot of the class to the `slot_nb_add()` function. Similarly, when we define the `__radd__()` method, `update_one_slot()` sets `nb_add` to `slot_nb_add()` as well. Note that when several special methods map to the same slot, they must agree on `function`.
+What `update_one_slot()` does is look up `class.__add__()` and `class.__radd__()`. If either is defined, it sets `nb_add` of the class to `slot_nb_add()`. Note that both entries agree on `slot_nb_add()` as `function`. Otherwise, we would have a conflict when both are defined.
 
 Now, what is `slot_nb_add()`, you ask? This function is defined with a macro that expands as follows:
 
@@ -744,19 +800,11 @@ slot_nb_add(PyObject *self, PyObject *other) {
 }
 ```
 
-You don't need to study this code carefully. It basicaly repeats the logic of its caller, `binary_op1()`. The main difference is that `slot_nb_add()` eventually calls `__add__()` or `__radd__()  ` special method.
-
-Now we know how the VM evaluates the expression `x + 7` when `x` is an instance of a class that defines `__add__()`:
-
-1. The VM calls `binary_op1()`.
-2. `binary_op1()` calls `slot_nb_add()`.
-3. `slot_nb_add()` calls `__add__()`.
-
-We've answered the question we started with. But, as it often happens, the answer gives rise to even more questions. Our goal for the rest of this post is to tackle those.
+You don't need to study this code carefully. Recall the `binary_op1()` function that calls the `nb_add` slot. The `slot_nb_add()` function basicaly repeats the logic of `binary_op1()`. The main difference is that `slot_nb_add()` eventually calls `__add__()` or `__radd__()  `.
 
 ## Setting special method on existing class
 
-Suppose that we create a class without `__add__()` and `__radd__()` methods. In this case, the `nb_add` slot of the class is set to `NULL`. As expected, we cannot add instances of that class. If we, however, update the class by setting `__add__()` or `__radd__()`, the addition works as if the method was a part of the class definition. Here's what I mean:
+Suppose that we create a class without `__add__()` and `__radd__()` methods. In this case, the `nb_add` slot of the class is set to `NULL`. As expected, we cannot add instances of that class. If we, however, set `__add__()` or `__radd__()` after the class has been created, the addition works as if the method was a part of the class definition. Here's what I mean:
 
 ```pycon
 $ python -q
@@ -774,31 +822,7 @@ TypeError: unsupported operand type(s) for +: 'A' and 'int'
 >>> 
 ```
 
-How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary and, if the attribute is a special method, it sets the corresponding slots. It basically calls the same `update_one_slot()` function.
+How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary. After this, it checks if the attribute is a special method. If it's a special method, the corresponding slots are set. The same `update_one_slot()` function is called to do that.
 
-## Inheritance
-
-When we define a class that inherits from other type, we expect the class to inherit some behavior of that type. For example, when we define a class  that inherits from `int`, we expect it to support the addition:
-
-```pycon
-$ python -q
->>> class MyInt(int):
-...     pass
-... 
->>> x = MyInt(2)
->>> y = MyInt(4)
->>> x + y
-6
-```
-
-Does `MyInt` inherit `nb_add` of `int`? How is that implemented? The `type_new()` function recieves a tuple of bases that we specified. Since bases, in turn, may inherit from other types, all these ancestor types combined form an hierarchy. An hierarchy, hovewer, doesn't specify the order of inheritance, so `type_new()` converts this hierarchy into a list. [The Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO) determines how to perform this conversion. Once the MRO is calculated, it's trivial to implement the inheritance. The `type_new()` function iterates over ancestors according to the MRO. From each ancestor, it copies those slots that haven't been set on the type before. Some slots support the inheritence and some don't. You can check in [the docs](https://docs.python.org/3/c-api/typeobj.html#type-objects) whether a particular slot is inherited or not.
-
-If no bases were specified, `type_new()` assumes that `object` is the only base. This is why all Python types directly or indirectly inherit from `object`.
-
-## Attributes
-
-The MRO plays two roles:
-
-* It's the order of slot inheritance.
-* It's the order of attribute lookup.
+## Special methods based on slots
 
