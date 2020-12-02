@@ -705,7 +705,7 @@ Four members of this struct are important for our discussion:
 * `name`  is a name of a special method.
 * `offset` is an offset of a slot in the `PyHeapTypeObject` struct. It specifies the slot corresponding to the special method.
 * `function` is an implementation of a slot. When a special method is defined, the corresponding slot is set to `function`. Typically, `function` calls special methods to do the work.
-* `wrapper` is a wrapper function around a slot. When a slot is specified, `wrapper` provides an implementation for the corresponding special method. It calls the slot to do the work.
+* `wrapper` is a wrapper function around a slot. When a slot is defined, `wrapper` provides an implementation for the corresponding special method. It calls the slot to do the work.
 
 Here's, for example, an entry that maps `__add__()` special method to the `nb_add` slot:
 
@@ -825,4 +825,15 @@ TypeError: unsupported operand type(s) for +: 'A' and 'int'
 How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary. After this, it checks if the attribute is a special method. If it's a special method, the corresponding slots are set. The same `update_one_slot()` function is called to do that.
 
 ## Special methods based on slots
+
+Recall the `PyType_Ready()` function that initializes types and does slot inheritance. It also adds special methods to a type based on the defined slots. `PyType_Ready()` calls `add_operators()` to do that. The `add_operators()` iterates over the `slotdefs` entries. For each entry, it checks whether the special method specified by the entry should be added to the type's dictionary. A special method is added if it's not already defined and if the type defines the slot specifed by the entry. For example, if the `__add__()` special method is not defined on a type, but the type defines the `nb_add` slot, `add_operators()` puts `__add__()` in the type's dictionary.
+
+What is `__add__()` set to? The `add_operators()` function sets special methods to wrapper descriptors. If you're unfamiliar with descriptors, I highly recommend you to read [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html) by Raymond Hettinger. In a nutshell, a descriptor is an attribute that by itself determines how you get, set and delete it. Technically, a descriptor is an object that implements [`__get__()`](https://docs.python.org/3/reference/datamodel.html#object.__get__), [`__set__()`](https://docs.python.org/3/reference/datamodel.html#object.__set__), or [`__delete__()`](https://docs.python.org/3/reference/datamodel.html#object.__delete__) methods.
+
+A wrapper descriptor is a descriptor that stores two things:
+
+* It stores a pointer to a slot function. This function "does the work" for a special method. For example, the wrapper descriptor of the `__add__()` special method of the `float` type stores a pointer to `float_add()`.
+* It stores a wrapper function. This function is the `wrapper` member of a `slotdef` entry.
+
+When we call a special method that was added by the `add_operators()` function, we actually call a wrapper descriptor. When we call a wrapper descriptor, it calls a wrapper function. A wrapper function recieves from the descriptor the same arguments that we pass to a special methods plus the wrapped slot function. The job of the wrapper function is to call the wrapped slot and pass the arguments in such a way as to get the desired result.
 
