@@ -357,7 +357,7 @@ The reason to prioritize the slot of a subtype is to allow the subtypes to overr
 $ python -q
 >>> class HungryInt(int):
 ...     def __add__(self, o):
-...         return self
+...         	return self
 ...
 >>> x = HungryInt(5)
 >>> x + 2
@@ -725,7 +725,7 @@ CPython uses the `slotdefs` array in two ways:
 
 The `type_new()` function calls `fixup_slot_dispatchers()` to set slots based on special methods. The `fixup_slot_dispatchers()` function calls `update_one_slot()` for each slot in the `slotdefs` array. And `update_one_slot()` sets the slot to `function` if a class has the corresponding special method.
 
-Let's take the `nb_slot` for example. The `slotdefs` array has two entries corresponding to that slot:
+Let's take the `nb_add` slot as an example. The `slotdefs` array has two entries corresponding to that slot:
 
 ```C
 static slotdef slotdefs[] = {
@@ -824,16 +824,91 @@ TypeError: unsupported operand type(s) for +: 'A' and 'int'
 
 How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary. After this, it checks if the attribute is a special method. If it's a special method, the corresponding slots are set. The same `update_one_slot()` function is called to do that.
 
+Before we can learn how CPython adds special methods to built-in types, we need to understand what a method is. 
+
+## Methods
+
+A method is an attribute, but a peculiar one. When we call a method from an instance, the method implicitly recieves the instance as its first parameter, which we usually denote `self`:
+
+```pycon
+$ python -q
+>>> class A:
+...     def method(self, x):
+...             return self, x
+...
+>>> a = A()
+>>> a.method(1)
+(<__main__.A object at 0x10d10bfd0>, 1)
+```
+
+But when we call the same method from a class, we have to pass all arguments explicitly:
+
+```C
+>>> A.method(a, 1)
+(<__main__.A object at 0x10d10bfd0>, 1)
+```
+
+In our example, the method takes one argument in one case and two arguments in another. How is that possible that the same attribute is a different thing depending on how we access it?
+
+First of all, realize that a method we define on a class is just a function. A function accessed through an instance differs from the same function accessed through the instance's type because the `function` type implements [the descriptor protocol](https://docs.python.org/3/howto/descriptor.html#descriptor-protocol). If you're unfamiliar with descriptors, I highly recommend you to read [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html) by Raymond Hettinger. In a nutshell, a descriptor is an object that, when used as an attribute, determines by itself how you get, set and delete it. Technically, a descriptor is an object that implements [`__get__()`](https://docs.python.org/3/reference/datamodel.html#object.__get__), [`__set__()`](https://docs.python.org/3/reference/datamodel.html#object.__set__), or [`__delete__()`](https://docs.python.org/3/reference/datamodel.html#object.__delete__) special methods.
+
+The `function` type implements `__get__()`. When we look up some method, what we get is the result of a call to `__get__()`. Three arguments are passed to it:
+
+* an attribute, i.e. a function
+* an instance
+* the instance's type.
+
+If we look up a method from a type, the instance is `NULL`, and `__get__()` simply returns the function. If we look up a method from an instance, `__get__()` returns a method object:
+
+```pycon
+>>> type(A.method)
+<class 'function'>
+>>> type(a.method)
+<class 'method'>
+```
+
+A method object stores a function and an instance. When called, it prepends the instance to the list of arguments and calls the function.
+
+Now we're ready to tackle the last question.
+
 ## Special methods based on slots
 
-Recall the `PyType_Ready()` function that initializes types and does slot inheritance. It also adds special methods to a type based on the defined slots. `PyType_Ready()` calls `add_operators()` to do that. The `add_operators()` iterates over the `slotdefs` entries. For each entry, it checks whether the special method specified by the entry should be added to the type's dictionary. A special method is added if it's not already defined and if the type defines the slot specifed by the entry. For example, if the `__add__()` special method is not defined on a type, but the type defines the `nb_add` slot, `add_operators()` puts `__add__()` in the type's dictionary.
+Recall the `PyType_Ready()` function that initializes types and does slot inheritance. It also adds special methods to a type based on the defined slots. `PyType_Ready()` calls `add_operators()` to do that. The `add_operators()` function iterates over the `slotdefs` entries. For each entry, it checks whether the special method specified by the entry should be added to the type's dictionary. A special method is added if it's not already defined and if the type defines the slot specifed by the entry. For example, if the `__add__()` special method is not defined on a type, but the type defines the `nb_add` slot, `add_operators()` puts `__add__()` in the type's dictionary.
 
-What is `__add__()` set to? The `add_operators()` function sets special methods to wrapper descriptors. If you're unfamiliar with descriptors, I highly recommend you to read [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html) by Raymond Hettinger. In a nutshell, a descriptor is an attribute that by itself determines how you get, set and delete it. Technically, a descriptor is an object that implements [`__get__()`](https://docs.python.org/3/reference/datamodel.html#object.__get__), [`__set__()`](https://docs.python.org/3/reference/datamodel.html#object.__set__), or [`__delete__()`](https://docs.python.org/3/reference/datamodel.html#object.__delete__) methods.
+What is `__add__()` set to? Like any other method, it must be set to some descriptor to behave like a method. While methods defined by a programmer are function, methods set by `add_operators()` are wrapper descriptors. A wrapper descriptor is a descriptor that stores two things:
 
-A wrapper descriptor is a descriptor that stores two things:
-
-* It stores a pointer to a slot function. This function "does the work" for a special method. For example, the wrapper descriptor of the `__add__()` special method of the `float` type stores a pointer to `float_add()`.
+* It stores a wrapped slot function. This function "does the work" for a special method. For example, the wrapper descriptor of the `__add__()` special method of the `float` type stores `float_add()`.
 * It stores a wrapper function. This function is the `wrapper` member of a `slotdef` entry.
 
-When we call a special method that was added by the `add_operators()` function, we actually call a wrapper descriptor. When we call a wrapper descriptor, it calls a wrapper function. A wrapper function recieves from the descriptor the same arguments that we pass to a special methods plus the wrapped slot function. The job of the wrapper function is to call the wrapped slot and pass the arguments in such a way as to get the desired result.
+When we call a special method that was added by the `add_operators()` function, we call a wrapper descriptor. When we call a wrapper descriptor, it calls a wrapper function. A wrapper descriptor passes to a wrapper function the same arguments that we pass to a special methods plus the wrapped slot function. Finally, the wrapper function calls the wrapped slot function.
+
+The reason two have a wrapper function is because it knows the right way to call the slot. Let's see what it means with an example.
+
+Recall the `slotdefs` entries corresponding to the `nb_add` slot:
+
+```C
+static slotdef slotdefs[] = {
+    // ...
+    // {name, offset, function,
+  	//     wrapper, doc}
+  	// 
+    {"__add__", offsetof(PyHeapTypeObject, as_number.nb_add), (void *)(slot_nb_add),
+        wrap_binaryfunc_l, PyDoc_STR("__add__" "($self, value, /)\n--\n\nReturn self" "+" "value.")},
+
+    {"__radd__", offsetof(PyHeapTypeObject, as_number.nb_add), (void *)(slot_nb_add),
+        wrap_binaryfunc_r, PyDoc_STR("__radd__" "($self, value, /)\n--\n\nReturn value" "+" "self.")},
+    // ...
+}
+```
+
+If a type defines the `nb_add` slot, `add_operators()` sets `__add__()` of the type to a wrapper descriptor with `wrap_binaryfunc_l()` as a wrapper function and the function pointed by `nb_add` as a wrapped function. It similarly sets `__radd__()` of the type with one exception: a wrapper function is `wrap_binaryfunc_r()`.
+
+Both `wrap_binaryfunc_l()` and `wrap_binaryfunc_r()` take two operands plus a wrapped slot function as their arguments. The only difference is how they call the slot function:
+
+* `wrap_binaryfunc_l(x, y, slot_func)` calls `slot_func(x, y)`
+* `wrap_binaryfunc_r(x, y, slot_func)` calls `slot_func(y, x)`.
+
+
+
+
 
