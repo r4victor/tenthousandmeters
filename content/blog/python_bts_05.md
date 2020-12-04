@@ -768,7 +768,7 @@ You don't need to remember these rules. You can always read the source code. Che
 
 The topic of Python variables is much more complicated than it may seem at first. A good portion of the Python documentation is related to variables, including a [section on naming and binding](https://docs.python.org/3/reference/executionmodel.html#naming-and-binding) and a [section on scopes and namespaces](https://docs.python.org/3/tutorial/classes.html#python-scopes-and-namespaces). The top questions of [the Python FAQ](https://docs.python.org/3/faq/programming.html) are about variables. I say nothing about questions on Stack Overflow. While the official resources give some idea why Python variables work the way they do, it's still hard to understand and remember all the rules. Fortunately, it's easier to understand how Python variables work by studying the source code of the Python implementation. And that's what we did today.
 
-We've studied a group of opcodes that CPython uses to load and store values of variables. To understand how the VM executes other opcodes that actually compute something, we need to discuss the core of Python – Python object system. This is our plan for the next time.
+We've studied a group of opcodes that CPython uses to load and store values of variables. To understand how the VM executes other opcodes that actually compute something, we need to discuss the core of Python – Python object system. This is our plan for [the next time]({filename}/blog/python_bts_06.md).
 
 <br>
 
