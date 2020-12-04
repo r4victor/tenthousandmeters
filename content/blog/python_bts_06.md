@@ -9,6 +9,8 @@ As we know from the previous parts of this series, the execution of a Python pro
 
 We've been focusing on the second step for quite a while. In [part 4]({filename}/blog/python_bts_04.md) we've looked at the evaluation loop, a place where Python bytecode gets executed. And in [part 5]({filename}/blog/python_bts_05.md) we've studied how the VM executes the instructions that are used to implement variables. What we haven't covered yet is how the VM actually computes something. We postponed this question because to answer it, we first need to understand how the most fundamental part of the language works. Today, we'll study the Python object system.
 
+**Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
+
 ## Motivation
 
 Consider an extremely simple piece of Python code:
@@ -23,14 +25,14 @@ To compute the function `f`, CPython must evaluate the expression `x + 7`. The q
 1. It calls `x.__add__(7)` or `type(x).__add__(x, 7)`.
 2. If `x` doesn't have `__add__()`, or if this method fails, it calls `(7).__radd__(x)` or `int.__radd__(7, x)`.
 
-The reality, tough, is a bit more compilcated. What really happens depends on what `x` is. For example, if `x` is an instance of a user-defined class, the algorithm described above resembles the truth. If, however, `x` is an instance of a built-in type, like `int` or `float`, CPython doesn't call any special methods at all.
+The reality, tough, is a bit more complicated. What really happens depends on what `x` is. For example, if `x` is an instance of a user-defined class, the algorithm described above resembles the truth. If, however, `x` is an instance of a built-in type, like `int` or `float`, CPython doesn't call any special methods at all.
 
 To learn how some Python code is executed, we can do the following:
 
-1. Dissassemble the code to bytecode.
-2. Study how the VM executes the dissassembled bytecode instructions.
+1. Disassemble the code into bytecode.
+2. Study how the VM executes the disassembled bytecode instructions.
 
-Let's apply this algorithm to the function `f`. The compiler translates the body of the function to the following bytecode:
+Let's apply this algorithm to the function `f`. The compiler translates the body of this function to the following bytecode:
 
 ```text
 $ python -m dis f.py
@@ -50,7 +52,7 @@ And here's what these bytecode instructions do:
 
 How does the VM add two values? To answer this question, we need to understand what these values are. For us, `7` is an instance of `int` and `x` is, well, anything. For the VM, though, everything is a Python object. All values the VM pushes onto the stack and pops from the stack are pointers to `PyObject` structs (hence the phrase "Everything in Python is an object").
 
-The VM doesn't need to know how to add integers or strings, that is, how to do the arithmetic or concatenate unicode sequences. All it needs to know is that every Python object has a type. A type, in turn, knows everything about its objects. For example, the `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
+The VM doesn't need to know how to add integers or strings, that is, how to do the arithmetic or concatenate sequences. All it needs to know is that every Python object has a type. A type, in turn, knows everything about its objects. For example, the `int` type knows how to add integers, and the `float` type knows how to add floats. So, the VM asks the type to perform the operation.
 
 This simplified explanation captures the essence of the solution, but it also omits a lot of important details. To get a more realistic picture, we need to understand what Python objects and types really are and how they work.
 
@@ -73,7 +75,7 @@ It has two members:
 * a reference count ` ob_refcnt` that CPython uses for garbage collection; and
 * a pointer to the object's type `ob_type`.
 
-We said that the VM treats any Python object as `PyObject`. How is that possible? The C programming languge has no notion of classes and inheritance. Nevertheless, it's possible to implement in C something that can be called a single inheritance. The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. So, we can "extend" `PyObject` by defining a new struct whose first member is `PyObject`.
+We said that the VM treats any Python object as `PyObject`. How is that possible? The C programming language has no notion of classes and inheritance. Nevertheless, it's possible to implement in C something that can be called a single inheritance. The C standard states that a pointer to any struct can be converted to a pointer to its first member and vice versa. So, we can "extend" `PyObject` by defining a new struct whose first member is `PyObject`.
 
 Here's, for example, how the `float` object is defined:
 
@@ -84,7 +86,7 @@ typedef struct {
 } PyFloatObject;
 ```
 
-A `float` object stores everything `PyObject` stores plus the floating-point value `ob_fval`. The C standard simply states that we can convert a pointer to `PyFloatObject` to a pointer to `PyObject` and vice versa:
+A `float` object stores everything `PyObject` stores plus a floating-point value `ob_fval`. The C standard simply states that we can convert a pointer to `PyFloatObject` to a pointer to `PyObject` and vice versa:
 
 ```C
 PyFloatObject float_object;
@@ -182,7 +184,7 @@ struct _typeobject {
 };
 ```
 
-Note that the first member of a type is not `PyObject` but `PyVarObject`, which is defined as follows:
+By the way, note that the first member of a type is not `PyObject` but `PyVarObject`, which is defined as follows:
 
 ```C
 typedef struct {
@@ -199,7 +201,7 @@ So, what is a type and why it has so many members? A type determines how the obj
 * `tp_str` is a pointer to a function that implements  `str()` for objects of the type.
 * `tp_hash` is a pointer to a function that implements  `hash()` for objects of the type.
 
-Some slots, called sub-slots, are grouped together in suites. A suite is just a stuct that contains related slots. For example, the `PySequenceMethods` struct is a suite of sub-slots that implement the sequence protocol:
+Some slots, called sub-slots, are grouped together in suites. A suite is just a struct that contains related slots. For example, the `PySequenceMethods` struct is a suite of sub-slots that implement the sequence protocol:
 
 ```C
 typedef struct {
@@ -272,17 +274,17 @@ case TARGET(BINARY_ADD): {
 }
 ```
 
-That's an interesting peice of code. We can see that it calls `PyNumber_Add()` to add two objects, but if the objects are strings, it calls `unicode_concatenate()` instead. Why so? This is an optimization. Python strings seem immutable, but sometimes CPython mutates a string and thus avoids creating a new string. Consider appending one string to another:
+This code requires some comments. We can see that it calls `PyNumber_Add()` to add two objects, but if the objects are strings, it calls `unicode_concatenate()` instead. Why so? This is an optimization. Python strings seem immutable, but sometimes CPython mutates a string and thus avoids creating a new string. Consider appending one string to another:
 
 ```python
 output += some_string
 ```
 
-If the `output ` variable points to a string that has no other references, it's safe to mutate that string. This what `unicode_concatenate()` does.
+If the `output ` variable points to a string that has no other references, it's safe to mutate that string. This is exactly the logic that `unicode_concatenate()` implements.
 
-It might be tempting to handle other special cases in the evaluation loop as well and optimize, for example, integers and floats. The comment explicitly warns against it. The problem is that a new special case comes with an additional check, and this check is only usefull when it succeeds. Otherwise, it may have a negative effect on performance. 
+It might be tempting to handle other special cases in the evaluation loop as well and optimize, for example, integers and floats. The comment explicitly warns against it. The problem is that a new special case comes with an additional check, and this check is only useful when it succeeds. Otherwise, it may have a negative effect on performance. 
 
-After this little digression, let's look at `PyNumber_Add()`. We find this function in [`Objects/abstract.c`](https://github.com/python/cpython/blob/3.9/Objects/abstract.c#L1016):
+After this little digression, let's look at `PyNumber_Add()`:
 
 ```C
 PyObject *
@@ -302,7 +304,7 @@ PyNumber_Add(PyObject *v, PyObject *w)
 }
 ```
 
-Let's first step into `binary_op1()` and figure out what `PyNumber_Add()` does later:
+I suggest to step into `binary_op1() ` straight away and figure out what the rest of `PyNumber_Add()` does later:
 
 ```C
 static PyObject *
@@ -343,7 +345,7 @@ binary_op1(PyObject *v, PyObject *w, const int op_slot)
 }
 ```
 
-The `binary_op1()` function takes an offset of a number slot as a parameter (in our case, the slot is `nb_add`). Then it gets the corresponding slots of both operands and implements essentialy the following logic:
+The `binary_op1()` function takes three parameters: the left operand, the right operand and an offset that identifies the slot. Types of both operands can implement the slot. Therefore, `binary_op1()` looks up both implementations. To calculate the result, it calls one implementation or another relying on the following logic:
 
 1. If the type of one operand is a subtype of another, call the slot of the subtype.
 
@@ -369,7 +371,7 @@ $ python -q
 5
 ```
 
-Let's turn back to `PyNumber_Add()`. If `binary_op1()` succeeds, `PyNumber_Add()` simply returns the result of `binary_op1()`. If `binary_op1()` returns the [`NotImplemented`](https://docs.python.org/3/library/constants.html#NotImplemented) constant, which means that the operation cannot be performed for a given combination of types, `PyNumber_Add()` tries to call the `sq_concat` sequence slot of the first operand and returns the result of this call:
+Let's turn back to `PyNumber_Add()`. If `binary_op1()` succeeds, `PyNumber_Add()` simply returns the result of `binary_op1()`. If, however, `binary_op1()` returns the [`NotImplemented`](https://docs.python.org/3/library/constants.html#NotImplemented) constant, which means that the operation cannot be performed for a given combination of types, `PyNumber_Add()` calls the `sq_concat` "sequence" slot of the first operand and returns the result of this call:
 
 ```C
 PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
@@ -378,23 +380,25 @@ if (m && m->sq_concat) {
 }
 ```
 
-A type can support the `+` operator either by defining `nb_add` or by defining `sq_concat`. These slots have  different semantics:
+A type can support the `+` operator either by implementing `nb_add` or `sq_concat`. These slots have different meanings:
 
 * `nb_add` means algebraic addition with properties like `a + b = b + a`.
 * `sq_concat` means the concatenation of sequences.
 
 Built-in types such as `int` and `float` implement `nb_add`, and built-in types such as `str` and `list` implement `sq_concat`. Technically, there's no much difference. The main reason to choose one slot over another is to indicate the appropriate meaning. In fact, the `sq_concat` slot is so unnecessary that it's set to `NULL` for all user-defined types (i.e. classes).
 
-In this section we saw how the `nb_add` slot is used. The next step is to see what it set to.
+We saw how the `nb_add` slot is used: it's called by the `binary_op1()` function. The next step is to see what it's set to.
 
-## How slots are set
+## What nb_add can be
 
 Since addition is a different operation for different types, the `nb_add` slot of a type must be one of two things:
 
 * it's either a type-specific function that adds object of that type; or
 * it's a type-agnostic function that calls some type-specific functions, such as type's `__add__()` special method.
 
-It's indeed one of these two, and which one depends on the type. For example, built-in types such as `int` and `float` have their own implementations of `nb_add`. In constrast, all classes share the same implementation. Fundamentaly, built-in types and classes are the same thing – instances of `PyTypeObject`. The important difference between them is how they are created. This difference effects the way the slots are set, so we should discuss it.
+It's indeed one of these two, and which one depends on the type. For example, built-in types such as `int` and `float` have their own implementations of `nb_add`. In contrast, all classes share the same implementation. Fundamentally, built-in types and classes are the same thing – instances of `PyTypeObject`. The important difference between them is how they are created. This difference effects the way the slots are set, so we should discuss it.
+
+## Ways to create a type
 
 There are two ways to create a type object:
 
@@ -475,6 +479,8 @@ float_add(PyObject *v, PyObject *w)
 
 The floating-point arithmetic is not that important for our discussion. This example demonstrates how to specify the behavior of a statically defined type. It turned out to be quite easy: just write the implementation of slots and point each slot to the corresponding implementation.
 
+If you want to learn how to statically define your own types, check out [Python's tutorial for C/C++ programmers](https://docs.python.org/3/extending/newtypes_tutorial.html).
+
 ### Dynamically allocated types
 
 Dynamically allocated types are the types we define using the `class` statement. As we've already said, they are instances of `PyTypeObject`, just like statically defined types. Traditionally, we call them classes but we might call them user-defined types as well.
@@ -496,7 +502,7 @@ $ python -m dis class_A.py
 
 Feel free to do that if you find the time, or read [the article on classes](https://eli.thegreenplace.net/2012/06/15/under-the-hood-of-python-class-definitions) by Eli Bendersky. We'll take a shortcut.
 
-To create a Python object we call its type, e.g. `int()`, `list()` or `MyClass()`. To create a type object, we call a type as well. Such a type whose instances are types is called a metatype. Python has one built-in metatype called `PyType_Type`, which is known to programmers simply as `type`. Here's how it's defined:
+An object is created by a call to a type, e.g. `list()` or `MyClass()`. A class is created by a call to a metatype. A metatype is just a type whose instances are types. Python has one built-in metatype called `PyType_Type`, which is known to us simply as `type`. Here's how it's defined:
 
 ```C
 PyTypeObject PyType_Type = {
@@ -545,12 +551,12 @@ PyTypeObject PyType_Type = {
 };
 ```
 
-All built-in types point to `type` as their type. So, `type` determines how built-in types behave. For example, what happens when we call a type, like `int()` or `MyClass()`, is specified by the `tp_call` slot of `type`. This slot points to the `type_call()` function that essentially does two things:
+The type of all built-in types is `type`, and the type of all classes defaults to `type`. So, `type` determines how types behave. For example, what happens when we call a type, like `list()` or `MyClass()`, is specified by the `tp_call` slot of `type`. The implementation of the `tp_call` slot of `type` is the `type_call()   ` function. Its job is to create new objects. It calls two other slots to do that:
 
 1. It calls `tp_new` of a type to create an object.
 2. It calls `tp_init` of a type to initialize the created object.
 
-The type of `type` is `type` itself (take a look at the definition above). So, when we call `type()`, the `type_call()` function is invoked. It checks for the special case when we pass a single argument to `type()`. In this case, `type_call()` simply returns the type of the passed object:
+The type of `type` is `type` itself. So, when we call `type()`, the `type_call()` function is invoked. It checks for the special case when we pass a single argument to `type()`. In this case, `type_call()` simply returns the type of the passed object:
 
 ```pycon
 $ python -q
@@ -562,7 +568,7 @@ $ python -q
 <class 'type'>
 ```
 
-But when we pass three arguments to `type()`, `type_call()` creates a new type by calling the `tp_new` and `tp_init` slots of `type` as described above. The following example demonstrates this usage of `type()`:
+But when we pass three arguments to `type()`, `type_call()` creates a new type by calling `tp_new` and `tp_init` of `type` as described above. The following example demonstrates how to use `type()` to create a class:
 
 ```pycon
 $ python -q
@@ -616,7 +622,7 @@ typedef struct _heaptypeobject {
 } PyHeapTypeObject;
 ```
 
-To set up a type object effectively means to set up its slots. This is what `type_new()` does for the most part.
+To set up a type object means to set up its slots. This is what `type_new()` does for the most part.
 
 ## Type initialization
 
@@ -626,7 +632,7 @@ The `PyType_Ready()` function does a number of things. For example, it does slot
 
 ## Slot inheritance
 
-When we define a class that inherits from other type, we expect that class to inherit some behavior of that type. For example, when we define a class that inherits from `int`, we expect it to support the addition:
+When we define a class that inherits from other type, we expect the class to inherit some behavior of that type. For example, when we define a class that inherits from `int`, we expect it to support the addition:
 
 ```pycon
 $ python -q
@@ -639,13 +645,13 @@ $ python -q
 6
 ```
 
-Does `MyInt` inherit the `nb_add` slot of `int`? Yes, it does. It's pretty straightforward to inherit the slots from a single ancestor: just copy those slots that the class doesn't have. It's a little bit more compicated when a class has multiple bases. Since bases, in turn, may inherit from other types, all these ancestor types combined form an hierarchy. The problem with the hierarchy is that it doesn't specify the order of inheritance. To solve this problem, `PyType_Ready()` converts this hierarchy into a list. [The Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO) determines how to perform this conversion. Once the MRO is calculated, it becomes easy to implement the inheritance in the general case. The `PyType_Ready()` function iterates over ancestors according to the MRO. From each ancestor, it copies those slots that haven't been set on the type before. Some slots support the inheritence and some don't. You can check in [the docs](https://docs.python.org/3/c-api/typeobj.html#type-objects) whether a particular slot is inherited.
+Does `MyInt` inherit the `nb_add` slot of `int`? Yes, it does. It's pretty straightforward to inherit the slots from a single ancestor: just copy those slots that the class doesn't have. It's a little bit more complicated when a class has multiple bases. Since bases, in turn, may inherit from other types, all these ancestor types combined form an hierarchy. The problem with the hierarchy is that it doesn't specify the order of inheritance. To solve this problem, `PyType_Ready()` converts this hierarchy into a list. [The Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO) determines how to perform this conversion. Once the MRO is calculated, it becomes easy to implement the inheritance in the general case. The `PyType_Ready()` function iterates over ancestors according to the MRO. From each ancestor, it copies those slots that haven't been set on the type before. Some slots support the inheritance and some don't. You can check in [the docs](https://docs.python.org/3/c-api/typeobj.html#type-objects) whether a particular slot is inherited.
 
 In contrast to a class, a statically defined type can specify at most one base. This is done by implementing the `tp_base` slot.
 
 If no bases for a type are specified, `PyType_Ready()` assumes that the `object` type is the only base. Every type directly or indirectly inherits from `object`. Why? Because it implements the slots that every type is expected to have. For example, it implements `tp_alloc`, `tp_init` and `tp_repr` slots.
 
-## The question
+## The ultimate question
 
 So far we've seen two ways in which a slot can be set:
 
@@ -714,7 +720,7 @@ Here's, for example, an entry that maps `__add__()` special method to the `nb_ad
 * `function` is `slot_nb_add()`.
 * `wrapper` is `wrap_binaryfunc_l()`.
 
-The `slotdefs` array is a many-to-many mapping. For example, as we'll see, both `__add__()` and `__radd__()` special methods map to the same `nb_add` slot. Conversely, both the `mp_subscript` "mapping" slot and the `sq_item` "sequence" slot map to the same `__getitem__()` special method.
+The `slotdefs` array is a many-to-many mapping. For example, as we'll see, both the `__add__()` and `__radd__()` special methods map to the same `nb_add` slot. Conversely, both the `mp_subscript` "mapping" slot and the `sq_item` "sequence" slot map to the same `__getitem__()` special method.
 
 CPython uses the `slotdefs` array in two ways:
 
@@ -723,7 +729,7 @@ CPython uses the `slotdefs` array in two ways:
 
 ## Slots based on special methods
 
-The `type_new()` function calls `fixup_slot_dispatchers()` to set slots based on special methods. The `fixup_slot_dispatchers()` function calls `update_one_slot()` for each slot in the `slotdefs` array. And `update_one_slot()` sets the slot to `function` if a class has the corresponding special method.
+The `type_new()` function calls `fixup_slot_dispatchers()` to set slots based on special methods. The `fixup_slot_dispatchers()` function calls `update_one_slot()` for each slot in the `slotdefs` array, and `update_one_slot()` sets the slot to `function` if a class has the corresponding special method.
 
 Let's take the `nb_add` slot as an example. The `slotdefs` array has two entries corresponding to that slot:
 
@@ -800,11 +806,11 @@ slot_nb_add(PyObject *self, PyObject *other) {
 }
 ```
 
-You don't need to study this code carefully. Recall the `binary_op1()` function that calls the `nb_add` slot. The `slot_nb_add()` function basicaly repeats the logic of `binary_op1()`. The main difference is that `slot_nb_add()` eventually calls `__add__()` or `__radd__()  `.
+You don't need to study this code carefully. Recall the `binary_op1()` function that calls the `nb_add` slot. The `slot_nb_add()` function basically repeats the logic of `binary_op1()`. The main difference is that `slot_nb_add()` eventually calls `__add__()` or `__radd__()  `.
 
 ## Setting special method on existing class
 
-Suppose that we create a class without `__add__()` and `__radd__()` methods. In this case, the `nb_add` slot of the class is set to `NULL`. As expected, we cannot add instances of that class. If we, however, set `__add__()` or `__radd__()` after the class has been created, the addition works as if the method was a part of the class definition. Here's what I mean:
+Suppose that we create a class without the `__add__()` and `__radd__()` special methods. In this case, the `nb_add` slot of the class is set to `NULL`. As expected, we cannot add instances of that class. If we, however, set `__add__()` or `__radd__()` after the class has been created, the addition works as if the method was a part of the class definition. Here's what I mean:
 
 ```pycon
 $ python -q
@@ -822,13 +828,13 @@ TypeError: unsupported operand type(s) for +: 'A' and 'int'
 >>> 
 ```
 
-How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary. After this, it checks if the attribute is a special method. If it's a special method, the corresponding slots are set. The same `update_one_slot()` function is called to do that.
+How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary. After this, it checks if the attribute is a special method. If it is a special method, the corresponding slots are set. The same `update_one_slot()` function is called to do that.
 
-Before we can learn how CPython adds special methods to built-in types, we need to understand what a method is. 
+Before we can learn how CPython does the reverse, that is, how it adds special methods to built-in types, we need to understand what a method is. 
 
 ## Methods
 
-A method is an attribute, but a peculiar one. When we call a method from an instance, the method implicitly recieves the instance as its first parameter, which we usually denote `self`:
+A method is an attribute, but a peculiar one. When we call a method from an instance, the method implicitly receives the instance as its first parameter, which we usually denote `self`:
 
 ```pycon
 $ python -q
@@ -843,7 +849,7 @@ $ python -q
 
 But when we call the same method from a class, we have to pass all arguments explicitly:
 
-```C
+```pycon
 >>> A.method(a, 1)
 (<__main__.A object at 0x10d10bfd0>, 1)
 ```
@@ -858,7 +864,7 @@ The `function` type implements `__get__()`. When we look up some method, what we
 * an instance
 * the instance's type.
 
-If we look up a method from a type, the instance is `NULL`, and `__get__()` simply returns the function. If we look up a method from an instance, `__get__()` returns a method object:
+If we look up a method on a type, the instance is `NULL`, and `__get__()` simply returns the function. If we look up a method on an instance, `__get__()` returns a method object:
 
 ```pycon
 >>> type(A.method)
@@ -873,18 +879,16 @@ Now we're ready to tackle the last question.
 
 ## Special methods based on slots
 
-Recall the `PyType_Ready()` function that initializes types and does slot inheritance. It also adds special methods to a type based on the defined slots. `PyType_Ready()` calls `add_operators()` to do that. The `add_operators()` function iterates over the `slotdefs` entries. For each entry, it checks whether the special method specified by the entry should be added to the type's dictionary. A special method is added if it's not already defined and if the type defines the slot specifed by the entry. For example, if the `__add__()` special method is not defined on a type, but the type defines the `nb_add` slot, `add_operators()` puts `__add__()` in the type's dictionary.
+Recall the `PyType_Ready()` function that initializes types and does slot inheritance. It also adds special methods to a type based on the implemented slots. `PyType_Ready()` calls `add_operators()` to do that. The `add_operators()` function iterates over the entries in the `slotdefs` array. For each entry, it checks whether the special method specified by the entry should be added to the type's dictionary. A special method is added if it's not already defined and if the type implements the slot specified by the entry. For example, if the `__add__()` special method is not defined on a type, but the type implements the `nb_add` slot, `add_operators()` puts `__add__()` in the type's dictionary.
 
-What is `__add__()` set to? Like any other method, it must be set to some descriptor to behave like a method. While methods defined by a programmer are function, methods set by `add_operators()` are wrapper descriptors. A wrapper descriptor is a descriptor that stores two things:
+What is `__add__()` set to? Like any other method, it must be set to some descriptor to behave like a method. While methods defined by a programmer are functions, methods set by `add_operators()` are wrapper descriptors. A wrapper descriptor is a descriptor that stores two things:
 
-* It stores a wrapped slot function. This function "does the work" for a special method. For example, the wrapper descriptor of the `__add__()` special method of the `float` type stores `float_add()`.
-* It stores a wrapper function. This function is the `wrapper` member of a `slotdef` entry.
+* It stores a wrapped slot. A wrapped slot "does the work" for a special method. For example, the wrapper descriptor of the `__add__()` special method of the `float` type stores `float_add()` as a wrapped slot.
+* It stores a wrapper function. A wrapper function "knows" how to call the wrapped slot. It is `wrapper` of a `slotdef` entry.
 
-When we call a special method that was added by the `add_operators()` function, we call a wrapper descriptor. When we call a wrapper descriptor, it calls a wrapper function. A wrapper descriptor passes to a wrapper function the same arguments that we pass to a special methods plus the wrapped slot function. Finally, the wrapper function calls the wrapped slot function.
+When we call a special method that was added by `add_operators()`, we call a wrapper descriptor. When we call a wrapper descriptor, it calls a wrapper function. A wrapper descriptor passes to a wrapper function the same arguments that we pass to a special methods plus the wrapped slot. Finally, the wrapper function calls the wrapped slot.
 
-The reason two have a wrapper function is because it knows the right way to call the slot. Let's see what it means with an example.
-
-Recall the `slotdefs` entries corresponding to the `nb_add` slot:
+Let's see how a built-in type that implements the `nb_add` slot gets its `__add__()` and `__radd__()` special methods. Recall the `slotdef` entries corresponding to `nb_add`:
 
 ```C
 static slotdef slotdefs[] = {
@@ -901,18 +905,18 @@ static slotdef slotdefs[] = {
 }
 ```
 
-If a type defines the `nb_add` slot, `add_operators()` sets `__add__()` of the type to a wrapper descriptor with `wrap_binaryfunc_l()` as a wrapper function and the function pointed by `nb_add` as a wrapped function. It similarly sets `__radd__()` of the type with one exception: a wrapper function is `wrap_binaryfunc_r()`.
+If a type implements the `nb_add` slot, `add_operators()` sets `__add__()` of the type to a wrapper descriptor with `wrap_binaryfunc_l()` as a wrapper function and `nb_add` as a wrapped slot. It similarly sets `__radd__()` of the type with one exception: a wrapper function is `wrap_binaryfunc_r()`.
 
-Both `wrap_binaryfunc_l()` and `wrap_binaryfunc_r()` take two operands plus a wrapped slot function as their arguments. The only difference is how they call the slot function:
+Both `wrap_binaryfunc_l()` and `wrap_binaryfunc_r()` take two operands plus a wrapped slot as their parameters. The only difference is how they call the slot:
 
 * `wrap_binaryfunc_l(x, y, slot_func)` calls `slot_func(x, y)`
 * `wrap_binaryfunc_r(x, y, slot_func)` calls `slot_func(y, x)`.
 
-
+The result of this call is what we get when we call the special method.
 
 ## Summary
 
-Today we've demystified perhaps the most magical aspect of Python. We've learned that the behavior of a Python object is determined by the slots of the object's type. The slots of a statically defined type can be specified explicitly, and any type can inherit some slots from its ancestors. The real insight was that the slots of a class are set up automatically by CPython based on the defined special methods. CPython does the reverse too. It adds special methods to the type's dictionary if the type defines the corresponding slots.
+Today we've demystified perhaps the most magical aspect of Python. We've learned that the behavior of a Python object is determined by the slots of the object's type. The slots of a statically defined type can be specified explicitly, and any type can inherit some slots from its ancestors. The real insight was that the slots of a class are set up automatically by CPython based on the defined special methods. CPython does the reverse too. It adds special methods to the type's dictionary if the type implements the corresponding slots.
 
 We've learned a lot. Nevertheless, the Python object system is such a vast subject that at least as much remains to be covered. For example, we haven't really discussed how attributes work. This is what we're going to do next time.
 
