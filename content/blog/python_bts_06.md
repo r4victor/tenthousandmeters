@@ -1,6 +1,13 @@
 Title: Python behind the scenes #6: how Python object system works
-Date: 2020-11-21 5:18
+Date: 2020-12-04 16:48
 Tags: Python behind the scenes, Python, CPython
+Summary: As we know from the previous parts of this series, the execution of a Python program consists of two major steps:
+    <br><br>
+    1. [The CPython compiler]({filename}/blog/python_bts_02.md) translates Python code to bytecode.
+    <br>
+    2. [The CPython VM]({filename}/blog/python_bts_01.md) executes the bytecode.
+    <br><br>
+    We've been focusing on the second step for quite a while. In [part 4]({filename}/blog/python_bts_04.md) we've looked at the evaluation loop, a place where Python bytecode gets executed. And in [part 5]({filename}/blog/python_bts_05.md) we've studied how the VM executes the instructions that are used to implement variables. What we haven't covered yet is how the VM actually computes something. We postponed this question because to answer it, we first need to understand how the most fundamental part of the language works. Today, we'll study the Python object system.
 
 As we know from the previous parts of this series, the execution of a Python program consists of two major steps:
 
