@@ -202,7 +202,7 @@ typedef struct {
 
 Nevertheless, since the first member of `PyVarObject` is `PyObject`, a pointer to a type can still be converted to a pointer to `PyObject`.
 
-So, what is a type and why it has so many members? A type determines how the objects of that type behave. Each member of a type, called slot, is responsible for a particular aspect of the object's behavior. For example:
+So, what is a type and why does it have so many members? A type determines how the objects of that type behave. Each member of a type, called slot, is responsible for a particular aspect of the object's behavior. For example:
 
 * `tp_new` is a pointer to a function that creates new objects of the type.
 * `tp_str` is a pointer to a function that implements  `str()` for objects of the type.
@@ -656,7 +656,7 @@ Does `MyInt` inherit the `nb_add` slot of `int`? Yes, it does. It's pretty strai
 
 In contrast to a class, a statically defined type can specify at most one base. This is done by implementing the `tp_base` slot.
 
-If no bases for a type are specified, `PyType_Ready()` assumes that the `object` type is the only base. Every type directly or indirectly inherits from `object`. Why? Because it implements the slots that every type is expected to have. For example, it implements `tp_alloc`, `tp_init` and `tp_repr` slots.
+If no bases are specified, `PyType_Ready()` assumes that the `object` type is the only base. Every type directly or indirectly inherits from `object`. Why? Because it implements the slots that every type is expected to have. For example, it implements `tp_alloc`, `tp_init` and `tp_repr` slots.
 
 ## The ultimate question
 
