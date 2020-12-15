@@ -312,5 +312,5 @@ We haven't covered a lot of things. We avoided digging into the source code. The
 
 <br>
 
-**Update 4 September 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals
+**Update from 4 September 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals
 
