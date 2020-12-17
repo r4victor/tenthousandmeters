@@ -166,11 +166,17 @@ Let's turn our attention to attrubutes.
 
 ## Attributes and the VM
 
-Like any other aspect of the object's behavior, how attributes of an object work depends on the object's type. The certain slots of a type specify what happens when we get and set attributes of an object of that type. Let's find out what those slots are and how they are used.
+What is an attribute? We might say that an attribute is a variable associated with an object, but it's more than that. It's hard to give a definition that captures all important aspects of attributes. So, instead of starting with a definition, let's start with something we know for sure.
 
-To learn how the CPython VM gets and sets attributes, we'll apply the familiar method:
+We know for sure that in Python we can do three things with attributes:
 
-1. Write a piece of code that gets (sets) an attribute.
+* get an attribute: `value = obj.attr`
+* set an attribute: `obj.attr = value`
+* delete an attribute: `del obj.attr`
+
+What these operations do depends, like any other aspect of the object's behavior, on the object's type. A type has certain slots responsible for getting, setting and deleting attributes. The VM calls these slots to execute the statements we listed above. To see what these slots are and how the VM calls them, let's apply the familiar method:
+
+1. Write a piece of code that gets/sets/deletes an attribute.
 2. Disassemble it to bytecode using the [`dis`](https://docs.python.org/3/library/dis.html) module.
 3. Take a look at the implementation of the produced bytecode instructions in [`ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c).
 
@@ -200,7 +206,7 @@ case TARGET(LOAD_ATTR): {
 }
 ```
 
-We can see that the VM calls the `PyObject_GetAttr()` function to do the job. Let's see what it does:
+We can see that the VM calls the `PyObject_GetAttr()` function to do the job. Here's what it does:
 
 ```C
 PyObject *
@@ -233,7 +239,7 @@ This function first tries to call the `tp_getattro` slot of the object's type. I
 
 A type defines `tp_getattro` or `tp_getattr` or both to support attribute access. [According to the documentation](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_getattr), the only difference between them is that `tp_getattro` takes a Python string as the name of an attribute and `tp_getattr` takes a C string. Though the choice exists, you won't find types in CPython that implement `tp_getattr`. This slot has been deprecated in favor of `tp_getattro`.
 
-## Setting an attribute
+### Setting an attribute
 
 From the VM's perspective, setting an attribute is not much different from getting it. The compiler produces the `STORE_ATTR` opcode to set the attribute:
 
@@ -263,7 +269,7 @@ case TARGET(STORE_ATTR): {
 }
 ```
 
-`PyObject_SetAttr()` is the function that does the job:
+We find that `PyObject_SetAttr()` is the function that does the job:
 
 ```C
 int
@@ -319,3 +325,45 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 This function calls the `tp_setattro` and `tp_setattr` slots the same way as `PyObject_GetAttr()` calls `tp_getattro` and `tp_getattr`. The `tp_setattro` slot comes in pair with `tp_getattro`, and `tp_setattr` comes in pair with `tp_getattr`. Just like `tp_getattr`, `tp_setattr` is deprecated.
 
 Note that `PyObject_SetAttr()` checks whether a type defines `tp_getattro` or `tp_getattr`. A type must implement attribute access to support attribute assignment.
+
+### Deleting an attribute
+
+Interestingly, a type has no special slot for deleting an attribute. What then specifies how to delete an attribute? Let's see. The compiler produces the `DELETE_ATTR` opcode to delete the attribute:
+
+```text
+$ echo 'del obj.attr' | python -m dis
+  1           0 LOAD_NAME                0 (obj)
+              2 DELETE_ATTR              1 (attr)
+```
+
+The way the VM executes this opcode reveals the answer:
+
+```C
+case TARGET(DELETE_ATTR): {
+    PyObject *name = GETITEM(names, oparg);
+    PyObject *owner = POP();
+    int err;
+    err = PyObject_SetAttr(owner, name, (PyObject *)NULL);
+    Py_DECREF(owner);
+    if (err != 0)
+        goto error;
+    DISPATCH();
+}
+```
+
+To delete an attribute, the VM calls the same `PyObject_SetAttr()` function that it calls to set an attribute. The `NULL` value indicates that the attribute should be deleted.
+
+In this section we've learned that the `tp_getattro` and `tp_setattro` slots determine how attributes of an object work. The next question that comes to mind is: How are these slots implemented?
+
+## Slots implementations
+
+Any function of the appropriate signature can be an implementation of  `tp_getattro` and `tp_setattro`. A type can implement these slots in an absolutely arbitrary way. Fortunately, we need to study only a few implementations to understand how Python attributes work. This is because most types use the same generic implementation.
+
+The generic functions for getting and setting attributes are  `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()`. All classes use them by default. Most built-in types specify them as slots implementations exlicitly or inherit them from `object` that also uses the generic implementation.
+
+One important example of a type that doesn't use the generic implementation is `type`. It implements `tp_getattro` and `tp_setattro` in its own way. So, attributes of types and attributes of ordinary objects work differently. Another notable exception is classes that customize attribute access and assignment by implementing the `__getattribute__()`,  `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. CPython sets their  `tp_getattro` and `tp_setattro` slots to functions that call the corresponding special methods. 
+
+## Generic attribute management
+
+The generic implementation of `tp_getattro` is the `PyObject_GenericGetAttr()` function, and the generic implementation of `tp_setattro` is the `PyObject_GenericSetAttr()` function. CPython sets the `tp_getattro` and `tp_setattro` slots of a class to these functions by default. Most built-in types either specify the generic functions as slots implementations explicitly or inherit them from `object`. So, usually, when we get or set an attribute of an object, CPython calls a generic function to perform the operation. 
+
