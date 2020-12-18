@@ -170,8 +170,8 @@ What is an attribute? We might say that an attribute is a variable associated wi
 
 We know for sure that in Python we can do three things with attributes:
 
-* get an attribute: `value = obj.attr`
-* set an attribute: `obj.attr = value`
+* get the value of an attribute: `value = obj.attr`
+* set an attribute to some value: `obj.attr = value`
 * delete an attribute: `del obj.attr`
 
 What these operations do depends, like any other aspect of the object's behavior, on the object's type. A type has certain slots responsible for getting, setting and deleting attributes. The VM calls these slots to execute the statements we listed above. To see what these slots are and how the VM calls them, let's apply the familiar method:
@@ -182,7 +182,7 @@ What these operations do depends, like any other aspect of the object's behavior
 
 ### Getting an attribute
 
-Let's first see what the VM does when we get an attribute of an object. The compiler produces the `LOAD_ATTR` opcode to load the attribute:
+Let's first see what the VM does when we get the attribute value. The compiler produces the `LOAD_ATTR` opcode to load the value:
 
 ```text
 $ echo 'obj.attr' | python -m dis
@@ -241,7 +241,7 @@ A type defines `tp_getattro` or `tp_getattr` or both to support attribute access
 
 ### Setting an attribute
 
-From the VM's perspective, setting an attribute is not much different from getting it. The compiler produces the `STORE_ATTR` opcode to set the attribute:
+From the VM's perspective, setting an attribute is not much different from getting it. The compiler produces the `STORE_ATTR` opcode to set an attribute to some value:
 
 ```text
 $ echo 'obj.attr = value' | python -m dis
@@ -361,9 +361,74 @@ Any function of the appropriate signature can be an implementation of  `tp_getat
 
 The generic functions for getting and setting attributes are  `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()`. All classes use them by default. Most built-in types specify them as slots implementations exlicitly or inherit them from `object` that also uses the generic implementation.
 
-One important example of a type that doesn't use the generic implementation is `type`. It implements `tp_getattro` and `tp_setattro` in its own way. So, attributes of types and attributes of ordinary objects work differently. Another notable exception is classes that customize attribute access and assignment by implementing the `__getattribute__()`,  `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. CPython sets their  `tp_getattro` and `tp_setattro` slots to functions that call the corresponding special methods. 
+One notable group of types that don't use the generic implementation is classes that customize attribute access and assignment by implementing the `__getattribute__()`,  `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. CPython sets their  `tp_getattro` and `tp_setattro` slots to the functions that call the corresponding special methods.
+
+Another important exception is `type`. It implements the `tp_getattro` and `tp_setattro` slots in its own way. So, attributes of types and attributes of ordinary objects work differently.
+
+Let's consider these three main implementations one by one and look at how attributes work in each case.
 
 ## Generic attribute management
 
-The generic implementation of `tp_getattro` is the `PyObject_GenericGetAttr()` function, and the generic implementation of `tp_setattro` is the `PyObject_GenericSetAttr()` function. CPython sets the `tp_getattro` and `tp_setattro` slots of a class to these functions by default. Most built-in types either specify the generic functions as slots implementations explicitly or inherit them from `object`. So, usually, when we get or set an attribute of an object, CPython calls a generic function to perform the operation. 
+The `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()` functions implement the behavior of attributes that we're all accustomed to. When we set an attribute of an object to some value, CPython puts the value in the object's dictionary:
 
+```pycon
+$ python -q
+>>> class A:
+...     pass
+... 
+>>> a = A()
+>>> a.__dict__
+{}
+>>> a.x = 'instance attribute'
+>>> a.__dict__
+{'x': 'instance attribute'}
+```
+
+When we try to get the value of the attribute, CPython loads it from the object's dictionary:
+
+```pycon
+>>> a.x
+'instance attribute'
+```
+
+If the object's dictionary doesn't contain the attribute, CPython loads the value from the type's dictionary:
+
+```pycon
+>>> A.y = 'class attribute'
+>>> a.y
+'class attribute'
+```
+
+If the type's dictionary doesn't contain the attribute either, CPython searches for the value in the dictionaries of parent types:
+
+```pycon
+>>> class B(A): # note the inheritance
+...     pass
+... 
+>>> b = B()
+>>> b.y
+'class attribute'
+```
+
+Such behavior agrees with the intuitive understanding. Sometimes, though, the generic implementation is not that straightforward. For example, some attributes of an object seem to belong to the object, but they are not in the object's dictionary. An example of such attribute is `__dict__` itself:
+
+```pycon
+>>> a.__dict__
+{'x': 'instance attribute'} # __dict__ isn't here
+```
+
+Where does object's `__dict__ ` come from? Let's take a look at the type's dictionary:
+
+```pycon
+>>> A.__dict__
+mappingproxy({'__module__': '__main__', '__dict__': <attribute '__dict__' of 'A' objects>, '__weakref__': <attribute '__weakref__' of 'A' objects>, '__doc__': None, 'y': 'class attribute'})
+```
+
+It contains the `'__dict__'` key. The value of this key is what we are looking for. If we call its `__get__()` method with the object as the argument, we'll get the object's dictionary:
+
+```pycon
+>>> A.__dict__['__dict__'].__get__(a)
+{'x': 'instance attribute'}
+```
+
+You may recognize that `A.__dict__['__dict__']` is a descriptor.
