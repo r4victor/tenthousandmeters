@@ -2,7 +2,7 @@ Title: Python behind the scenes #7: how Python attributes work
 Date: 2020-12-15 6:25
 Tags: Python behind the scenes, Python, CPython
 
-What happens when you get or set an attribute of a Python object? This question is not as simple as it may seem at first. It's true that any experienced Python programmer has a good intuitive understanding of how attributes work, and the documentation helps a lot to strengthen the understanding. Yet, once a really non-trivial question regarding attributes comes up, the intuition fails and the documentation can no longer help. To gain a deep understanding and be able to answer such questions, one has to study how attributes are implemented. That's what we're going to do today.
+What happens when we get or set an attribute of a Python object? This question is not as simple as it may seem at first. It's true that any experienced Python programmer has a good intuitive understanding of how attributes work, and the documentation helps a lot to strengthen the understanding. Yet, once a really non-trivial question regarding attributes comes up, the intuition fails and the documentation can no longer help. To gain a deep understanding and be able to answer such questions, one has to study how attributes are implemented. That's what we're going to do today.
 
 ## A brief recall
 
@@ -431,4 +431,223 @@ It contains the `'__dict__'` key. The value of this key is what we are looking f
 {'x': 'instance attribute'}
 ```
 
-You may recognize that `A.__dict__['__dict__']` is a descriptor.
+You may recognize that `A.__dict__['__dict__']` is a descriptor. Descriptors are what makes the generic implementation a bit complex. But they also make it powerfull. As Python's glossary [says](https://docs.python.org/3/glossary.html#term-descriptor),
+
+> Understanding descriptors is a key to a deep understanding of Python because they are the basis for many features including functions, methods, properties, class methods, static methods, and reference to super classes.
+
+We've already mentioned descriptors in the previous part. This time, let's study them more thoroughly.
+
+## Descriptors
+
+Essentially, a descriptor is a Python object that, when used as an attribute, controls how we get, set or delete it. Techically, a descriptor is a Python object whose type implements certain slots: `tp_descr_get` or `tp_descr_set` or both. Such a type is called a descriptor type or simply a descriptor when it doesn't lead to an ambiguity. 
+
+The `tp_descr_get` slot controls the attribute access, and the `tp_descr_set` slot controls the attribute assignment and deletion. When `PyObject_GenericGetAttr()` finds the attribute value whose type implements `tp_descr_get`, it returns not the value itself but the result of the call `tp_descr_get(value, obj, obj_type)`. Similarly, `PyObject_GenericSetAttr()` looks up the current attribute value. If the value's type implements `tp_descr_set`, `PyObject_GenericSetAttr()` calls `tp_descr_set(value, obj, new_value)` instead of updating the object's dictionary. When we delete an attribute, `PyObject_GenericSetAttr()` calls `tp_descr_set` with the new value set to `NULL`.
+
+Why do we need descriptors? Last time we saw that descriptors are used to implement methods. I think it's a good idea to revise this use case. Let's add a trivial function to the class's dictionary:
+
+```pycon
+>>> A.func = lambda self: self
+```
+
+When we call this function on the instance, we don't need to pass the argument explicitly:
+
+```pycon
+>>> a.func()
+<__main__.A object at 0x108a20d60>
+```
+
+The function works like a method. Moreover, we expect `a.func` to be a method:
+
+```pycon
+>>> a.func
+<bound method <lambda> of <__main__.A object at 0x108a20d60>>
+```
+
+This is not the original function. To get the original function, we need to manually look it up in the class's dictionary:
+
+```pycon
+>>> A.__dict__['func']
+<function <lambda> at 0x108a4ca60> 
+```
+
+The `func` attribute returns not the function itself but a method because a function object is a descriptor. The `tp_descr_get` slot of the `function` type returns a method object that stores both the function and the instance. When we call a method object, the instance is prepended to the list of arguments and the function gets called.
+
+The `function` type is an example of a built-in descriptor type. We can also define our own descriptors. To do that, we create a class that implements the descriptor protocol: the `__get__()`, `__set__()` and `__delete__()` special methods:
+
+```pycon
+>>> class DescrClass:
+...     def __get__(self, obj, type=None):
+...             print('I can do anything')
+...             return self
+...
+>>> A.descr_attr = DescrClass()
+>>> a.descr_attr 
+I can do anything
+<__main__.DescrClass object at 0x108b458e0>
+```
+
+If a class defines `__get__()`, CPython sets its `tp_descr_get` slot to the function that calls that method. If a class defines `__set__()` or `__delete__()`, CPython sets its `tp_descr_set` slot to the function that calls `__delete__()` when the value is `NULL` and calls `__set__()` otherwise.
+
+If you wonder why anyone would want to define their our descriptors in the first place, check out the excellent [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#id1) by Raymond Hettinger.
+
+Recall that we started our discussion about descriptors when we found that the `__dict__` attribute of an object is actually a descriptor stored in the type's dictionary:
+
+```pycon
+>>> a.__dict__ is A.__dict__['__dict__'].__get__(a)
+True
+```
+
+The descriptor returns the object's dictionary, but what is an object's dictionary really and where does it come from? How is it different from a type's dictionary? Let's find this out.
+
+## Object's and type's dictionaries
+
+An object's dictionary is a dictionary in which the generic implementation stores attributes of the object. A pointer to the object's dictionary is a member of the object. For example, a function object has the `func_dict` member that points to the function's dictionary:
+
+```C
+typedef struct {
+    // ...
+    PyObject *func_dict;        /* The __dict__ attribute, a dict or NULL */
+    // ...
+} PyFunctionObject;
+```
+
+To tell CPython which member of an object is the pointer to the object's dictionary, the object's type specifies an offset of this member using the `tp_dictoffset` slot. Here's how the `function` type does this:
+
+```C
+PyTypeObject PyFunction_Type = {
+    // ...
+    offsetof(PyFunctionObject, func_dict),      /* tp_dictoffset */
+    // ... 
+};
+```
+
+A positive value of `tp_dictoffset` specifies an offset from the start of the struct. A negative value specifies an offset from the end of the struct. The zero offset means that the object doesn't have the dictionary. For example, integers don't have dictionaries because `tp_dictoffset` of the `int` type is set to `0`:
+
+```pycon
+>>> (12).__dict__
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+AttributeError: 'int' object has no attribute '__dict__'
+>>> int.__dictoffset__
+0
+```
+
+Typically, classes have a non-zero `tp_dictoffset`. The only exception is classes that define the `__slots__` attribute. We'll discuss what this attribute means a bit later.
+
+## PyObject_GenericGetAttr()
+
+```C
+PyObject *
+_PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
+                                 PyObject *dict, int suppress)
+{
+    /* Make sure the logic of _PyObject_GetMethod is in sync with
+       this method.
+
+       When suppress=1, this function suppress AttributeError.
+    */
+
+    PyTypeObject *tp = Py_TYPE(obj);
+    PyObject *descr = NULL;
+    PyObject *res = NULL;
+    descrgetfunc f;
+    Py_ssize_t dictoffset;
+    PyObject **dictptr;
+
+    if (!PyUnicode_Check(name)){
+        PyErr_Format(PyExc_TypeError,
+                     "attribute name must be string, not '%.200s'",
+                     Py_TYPE(name)->tp_name);
+        return NULL;
+    }
+    Py_INCREF(name);
+
+    if (tp->tp_dict == NULL) {
+        if (PyType_Ready(tp) < 0)
+            goto done;
+    }
+
+    descr = _PyType_Lookup(tp, name);
+
+    f = NULL;
+    if (descr != NULL) {
+        Py_INCREF(descr);
+        f = Py_TYPE(descr)->tp_descr_get;
+        if (f != NULL && PyDescr_IsData(descr)) {
+            res = f(descr, obj, (PyObject *)Py_TYPE(obj));
+            if (res == NULL && suppress &&
+                    PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                PyErr_Clear();
+            }
+            goto done;
+        }
+    }
+
+    if (dict == NULL) {
+        /* Inline _PyObject_GetDictPtr */
+        dictoffset = tp->tp_dictoffset;
+        if (dictoffset != 0) {
+            if (dictoffset < 0) {
+                Py_ssize_t tsize = Py_SIZE(obj);
+                if (tsize < 0) {
+                    tsize = -tsize;
+                }
+                size_t size = _PyObject_VAR_SIZE(tp, tsize);
+                _PyObject_ASSERT(obj, size <= PY_SSIZE_T_MAX);
+
+                dictoffset += (Py_ssize_t)size;
+                _PyObject_ASSERT(obj, dictoffset > 0);
+                _PyObject_ASSERT(obj, dictoffset % SIZEOF_VOID_P == 0);
+            }
+            dictptr = (PyObject **) ((char *)obj + dictoffset);
+            dict = *dictptr;
+        }
+    }
+    if (dict != NULL) {
+        Py_INCREF(dict);
+        res = PyDict_GetItemWithError(dict, name);
+        if (res != NULL) {
+            Py_INCREF(res);
+            Py_DECREF(dict);
+            goto done;
+        }
+        else {
+            Py_DECREF(dict);
+            if (PyErr_Occurred()) {
+                if (suppress && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                    PyErr_Clear();
+                }
+                else {
+                    goto done;
+                }
+            }
+        }
+    }
+
+    if (f != NULL) {
+        res = f(descr, obj, (PyObject *)Py_TYPE(obj));
+        if (res == NULL && suppress &&
+                PyErr_ExceptionMatches(PyExc_AttributeError)) {
+            PyErr_Clear();
+        }
+        goto done;
+    }
+
+    if (descr != NULL) {
+        res = descr;
+        descr = NULL;
+        goto done;
+    }
+
+    if (!suppress) {
+        PyErr_Format(PyExc_AttributeError,
+                     "'%.50s' object has no attribute '%U'",
+                     tp->tp_name, name);
+    }
+  done:
+    Py_XDECREF(descr);
+    Py_DECREF(name);
+    return res;
+}
+```
+
