@@ -459,8 +459,6 @@ Descriptors have their special behavior only when they are used as type variable
 
 Apparently, the language designers haven't found a case when using a descriptor as an instance variable would be a good idea. The consequence of this is that instance variables are very straightforward. They are just data.
 
-
-
 The `function` type is an example of a built-in descriptor type. We can also define our own descriptors. To do that, we create a class that implements the descriptor protocol: the `__get__()`, `__set__()` and `__delete__()` special methods:
 
 ```pycon
@@ -479,100 +477,11 @@ If a class defines `__get__()`, CPython sets its `tp_descr_get` slot to the func
 
 If you wonder why anyone would want to define their our descriptors in the first place, check out the excellent [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#id1) by Raymond Hettinger.
 
---
+Now, when we know what descriptors are, we're ready to study the algorithms for getting and setting attributes. However, since we're going to look at the actual code, we first need to understand where attributes are stored. That is, we need to understand what the object's and type's dictionaries really are.
 
-Sometimes, though, the generic implementation is not that straightforward. For example, some attributes of an object seem to belong to the object, but they are not in the object's dictionary. An example of such attribute is `__dict__` itself:
+### Object's and type's dictionaries
 
-```pycon
->>> a.__dict__
-{'x': 'instance attribute'} # __dict__ isn't here
-```
-
-Where does object's `__dict__ ` come from? Let's take a look at the type's dictionary:
-
-```pycon
->>> A.__dict__
-mappingproxy({'__module__': '__main__', '__dict__': <attribute '__dict__' of 'A' objects>, '__weakref__': <attribute '__weakref__' of 'A' objects>, '__doc__': None, 'y': 'class attribute'})
-```
-
-It contains the `'__dict__'` key. The value of this key is what we are looking for. If we call its `__get__()` method with the object as the argument, we'll get the object's dictionary:
-
-```pycon
->>> A.__dict__['__dict__'].__get__(a)
-{'x': 'instance attribute'}
-```
-
-You may recognize that `A.__dict__['__dict__']` is a descriptor. Descriptors are what makes the generic implementation a bit complex. But they also make it powerfull. As Python's glossary [says](https://docs.python.org/3/glossary.html#term-descriptor),
-
-> Understanding descriptors is a key to a deep understanding of Python because they are the basis for many features including functions, methods, properties, class methods, static methods, and reference to super classes.
-
-We've already mentioned descriptors in the previous part. This time, let's study them more thoroughly.
-
-## Descriptors
-
-Essentially, a descriptor is a Python object that, when used as an attribute, controls how we get, set or delete it. Techically, a descriptor is a Python object whose type implements certain slots: `tp_descr_get` or `tp_descr_set` or both. Such a type is called a descriptor type or simply a descriptor when it doesn't lead to an ambiguity. 
-
-The `tp_descr_get` slot controls the attribute access, and the `tp_descr_set` slot controls the attribute assignment and deletion. When `PyObject_GenericGetAttr()` finds the attribute value whose type implements `tp_descr_get`, it returns not the value itself but the result of the call `tp_descr_get(value, obj, obj_type)`. Similarly, `PyObject_GenericSetAttr()` looks up the current attribute value. If the value's type implements `tp_descr_set`, `PyObject_GenericSetAttr()` calls `tp_descr_set(value, obj, new_value)` instead of updating the object's dictionary. When we delete an attribute, `PyObject_GenericSetAttr()` calls `tp_descr_set` with the new value set to `NULL`.
-
-Why do we need descriptors? Last time we saw that descriptors are used to implement methods. I think it's a good idea to revise this use case. Let's add a trivial function to the class's dictionary:
-
-```pycon
->>> A.func = lambda self: self
-```
-
-When we call this function on the instance, we don't need to pass the argument explicitly:
-
-```pycon
->>> a.func()
-<__main__.A object at 0x108a20d60>
-```
-
-The function works like a method. Moreover, we expect `a.func` to be a method:
-
-```pycon
->>> a.func
-<bound method <lambda> of <__main__.A object at 0x108a20d60>>
-```
-
-This is not the original function. To get the original function, we need to manually look it up in the class's dictionary:
-
-```pycon
->>> A.__dict__['func']
-<function <lambda> at 0x108a4ca60> 
-```
-
-The `func` attribute returns not the function itself but a method because functions are descriptors. The `function` type implements the `tp_descr_get` slot, so `PyObject_GenericGetAttr()` calls this slot and returns the result. The result of the call is a method object that stores both the function and the instance. When we call a method object, the instance is prepended to the list of arguments and the function gets called.
-
-The `function` type is an example of a built-in descriptor type. We can also define our own descriptors. To do that, we create a class that implements the descriptor protocol: the `__get__()`, `__set__()` and `__delete__()` special methods:
-
-```pycon
->>> class DescrClass:
-...     def __get__(self, obj, type=None):
-...             print('I can do anything')
-...             return self
-...
->>> A.descr_attr = DescrClass()
->>> a.descr_attr 
-I can do anything
-<__main__.DescrClass object at 0x108b458e0>
-```
-
-If a class defines `__get__()`, CPython sets its `tp_descr_get` slot to the function that calls that method. If a class defines `__set__()` or `__delete__()`, CPython sets its `tp_descr_set` slot to the function that calls `__delete__()` when the value is `NULL` and calls `__set__()` otherwise.
-
-If you wonder why anyone would want to define their our descriptors in the first place, check out the excellent [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#id1) by Raymond Hettinger.
-
-Recall that we started our discussion about descriptors when we found that the `__dict__` attribute of an object is actually a descriptor stored in the type's dictionary:
-
-```pycon
->>> a.__dict__ is A.__dict__['__dict__'].__get__(a)
-True
-```
-
-The descriptor returns the object's dictionary, but what is an object's dictionary really and where does it come from? How is it different from a type's dictionary? Let's find this out.
-
-## Object's and type's dictionaries
-
-An object's dictionary is a dictionary in which the generic implementation stores attributes of the object. A pointer to the object's dictionary is a member of the object. For example, a function object has the `func_dict` member that points to the function's dictionary:
+An object's dictionary is a dictionary in which instance variables are stored. A pointer to the object's dictionary is a member of the object. For example, a function object has the `func_dict` member that points to the function's dictionary:
 
 ```C
 typedef struct {
@@ -603,13 +512,15 @@ AttributeError: 'int' object has no attribute '__dict__'
 0
 ```
 
-Typically, classes have a non-zero `tp_dictoffset`. The only exception is classes that define the `__slots__` attribute. This attribute is an optimization. Let's cover the essentials first and disccus `__slots__` later.
+Typically, classes have a non-zero `tp_dictoffset`. The only exception is classes that define the `__slots__` attribute. This attribute is an optimization. We'll cover the essentials first and disccus `__slots__` later.
 
 A type's dictionary is a dictionary of a type object. Just like the `func_dict` member of a function points to the function's dictionary, the `tp_dict` slot of a type points to the type's dictionary. The crucial difference between the dictionary of an ordinary object and the dictionary of a type is that CPython knows about `tp_dict`, so it doesn't need to locate the dictionary of a type via `tp_dictoffset`. Since `tp_dictoffset` of `type` is unnecessary, it's set to `0`. Handling the type's dictionary in a general way would indroduce an additional level of indirection and, as we'll see, wouldn't bring much benefit.
 
-Now, when we know what descriptors are and where attributes are stored, we're ready to see how the `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()` functions work.
+Now, when we know what descriptors are and where attributes are stored, we're ready to see what the `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()` functions do.
 
-## PyObject_GenericGetAttr()
+### PyObject_GenericSetAttr()
+
+### PyObject_GenericGetAttr()
 
 We begin with `PyObject_GenericGetAttr()`, a function whose job is to return the value of an attribute. We find that it's actually a thin wrapper around another function:
 
@@ -751,4 +662,35 @@ This is the thing to remember:
 1. type's data descriptors
 2. object's values
 3. type's non-data descriptors other type's values
+
+
+
+--
+
+Sometimes, though, the generic implementation is not that straightforward. For example, some attributes of an object seem to belong to the object, but they are not in the object's dictionary. An example of such attribute is `__dict__` itself:
+
+```pycon
+>>> a.__dict__
+{'x': 'instance attribute'} # __dict__ isn't here
+```
+
+Where does object's `__dict__ ` come from? Let's take a look at the type's dictionary:
+
+```pycon
+>>> A.__dict__
+mappingproxy({'__module__': '__main__', '__dict__': <attribute '__dict__' of 'A' objects>, '__weakref__': <attribute '__weakref__' of 'A' objects>, '__doc__': None, 'y': 'class attribute'})
+```
+
+It contains the `'__dict__'` key. The value of this key is what we are looking for. If we call its `__get__()` method with the object as the argument, we'll get the object's dictionary:
+
+```pycon
+>>> A.__dict__['__dict__'].__get__(a)
+{'x': 'instance attribute'}
+```
+
+You may recognize that `A.__dict__['__dict__']` is a descriptor. Descriptors are what makes the generic implementation a bit complex. But they also make it powerfull. As Python's glossary [says](https://docs.python.org/3/glossary.html#term-descriptor),
+
+> Understanding descriptors is a key to a deep understanding of Python because they are the basis for many features including functions, methods, properties, class methods, static methods, and reference to super classes.
+
+We've already mentioned descriptors in the previous part. This time, let's study them more thoroughly.
 
