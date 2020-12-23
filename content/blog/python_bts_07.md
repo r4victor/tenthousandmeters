@@ -520,9 +520,123 @@ Now, when we know what descriptors are and where attributes are stored, we're re
 
 ### PyObject_GenericSetAttr()
 
+We begin with `PyObject_GenericSetAttr()`, a function whose job is set an attribute to a given value. This function turns out to be a thin wrapper around another function:
+
+```C
+int
+PyObject_GenericSetAttr(PyObject *obj, PyObject *name, PyObject *value)
+{
+    return _PyObject_GenericSetAttrWithDict(obj, name, value, NULL);
+}
+```
+
+And that function actually does the work:
+
+```C
+int
+_PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
+                                 PyObject *value, PyObject *dict)
+{
+    PyTypeObject *tp = Py_TYPE(obj);
+    PyObject *descr;
+    descrsetfunc f;
+    PyObject **dictptr;
+    int res = -1;
+
+    if (!PyUnicode_Check(name)){
+        PyErr_Format(PyExc_TypeError,
+                     "attribute name must be string, not '%.200s'",
+                     Py_TYPE(name)->tp_name);
+        return -1;
+    }
+
+    if (tp->tp_dict == NULL && PyType_Ready(tp) < 0)
+        return -1;
+
+    Py_INCREF(name);
+		
+    // Look up the current attribute value
+  	// in the type's dict and its parents' dicts using the MRO.
+    descr = _PyType_Lookup(tp, name);
+
+  	// If found a descriptor that implements `tp_descr_set`, call this slot.
+    if (descr != NULL) {
+        Py_INCREF(descr);
+        f = Py_TYPE(descr)->tp_descr_set;
+        if (f != NULL) {
+            res = f(descr, obj, value);
+            goto done;
+        }
+    }
+
+  	// `PyObject_GenericSetAttr()` calls us with `dict` set to `NULL`.
+  	// So, `if` will be executed.
+    if (dict == NULL) {
+      	// Get the object's dict.
+        dictptr = _PyObject_GetDictPtr(obj);
+        if (dictptr == NULL) {
+            if (descr == NULL) {
+                PyErr_Format(PyExc_AttributeError,
+                             "'%.100s' object has no attribute '%U'",
+                             tp->tp_name, name);
+            }
+            else {
+                PyErr_Format(PyExc_AttributeError,
+                             "'%.50s' object attribute '%U' is read-only",
+                             tp->tp_name, name);
+            }
+            goto done;
+        }
+      	// Update the object's dict with the new value.
+      	// If `value` is `NULL`, delete the attribute from the dict.
+        res = _PyObjectDict_SetItem(tp, dictptr, name, value);
+    }
+    else {
+        Py_INCREF(dict);
+        if (value == NULL)
+            res = PyDict_DelItem(dict, name);
+        else
+            res = PyDict_SetItem(dict, name, value);
+        Py_DECREF(dict);
+    }
+    if (res < 0 && PyErr_ExceptionMatches(PyExc_KeyError))
+        PyErr_SetObject(PyExc_AttributeError, name);
+
+  done:
+    Py_XDECREF(descr);
+    Py_DECREF(name);
+    return res;
+}
+```
+
+Despite its length, it implements a simple algorithm:
+
+1. Search for the attribute value among type variables. The order of search is the MRO.
+2. If the value is a descriptor whose type implements the `tp_descr_set` slot, call the slot.
+3. Otherwise, update the object's dictionary with the new value.
+
+We haven't discussed the descriptors that implement the `tp_descr_set` slot, so you may wonder why we need them at all. Consider Python's `property()`. The following example from the docs demostrates its canonical usage to create a managed attribute:
+
+```python
+class C:
+    def __init__(self):
+        self._x = None
+    def getx(self):
+        return self._x
+    def setx(self, value):
+        self._x = value
+    def delx(self):
+        del self._x
+    x = property(getx, setx, delx, "I'm the 'x' property.")
+```
+
+> If c is an instance of C, `c.x` will invoke the getter, `c.x = value` will invoke the setter and `del c.x` the deleter.
+
+How does `property()` work? The answer is simple. It's a descriptor type. It implements both the `tp_descr_get` and `tp_descr_set` slots that call the specified functions. Though the example from the docs doesn't show this, we can use a custom setter to do something useful. For example, we can use it to perform some validation of the new value.
+
 ### PyObject_GenericGetAttr()
 
-We begin with `PyObject_GenericGetAttr()`, a function whose job is to return the value of an attribute. We find that it's actually a thin wrapper around another function:
+Getting the value of an attribute is a bit more complicated than setting it. Let's see by how much. The `PyObject_GenericGetAttr()` function also delegates the work to another function: 
 
 ```C
 PyObject *
@@ -532,7 +646,7 @@ PyObject_GenericGetAttr(PyObject *obj, PyObject *name)
 }
 ```
 
-And that function actually does the work:
+And here's what that function does:
 
 ```C
 PyObject *
@@ -649,21 +763,51 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
 }
 ```
 
-Let's highlight the major steps of this algorithm:
+The major steps of this algorithm are:
 
-1. Look up the value in the type's dictionary and in the dictionaries of the parent types. The order of look up is the Method Resolution Order (MRO).
+1. Search for the attribute value among type variables. The order of search is the MRO.
 2. If the value is a data descriptor whose type implements the `tp_descr_get` slot, call this slot and return the result. Otherwise, remember the value and continue. A data descriptor is a descriptor whose type implements the `tp_descr_set` slot.
 3. Locate the object's dictionary using `tp_dictoffset`. If the dictionary contains the value, return it.
 4. If the value from step 2 is a descriptor whose type implements the `tp_descr_get` slot, call this slot and return the result.
 5. Return the value from step 2. The value can be `NULL`.
 
-This is the thing to remember:
+Since an attribute can be both an instance variable and a type variable, CPython must decide which one takes precedence over the other. What the algorithm does is essentially implement a certain order of precedence. This order is:
 
-1. type's data descriptors
-2. object's values
-3. type's non-data descriptors other type's values
+1. type data descriptors
+2. instance variables
+3. type non-data descriptors and other type variables
 
+The natural question to ask is: Why does it implement this particular order? More specifically, **why do data descriptors take precedence over instance variables but non-data descriptros don't? **First of all, note that some descriptors must take precedence over instance variables in order for Python to work as expected. An example of such a descriptor is the `__dict__` attribute of an object. You won't find the `'__dict__'` key in the object's dictionary because `__dict__` is a data descriptor stored in the type's dictionary:
 
+```pycon
+>>> a.__dict__
+{'x': 'instance attribute', 'g': <function <lambda> at 0x108a4cc10>}
+>>> A.__dict__['__dict__']
+<attribute '__dict__' of 'A' objects>
+>>> a.__dict__ is A.__dict__['__dict__'].__get__(a)
+True
+```
+
+The `tp_descr_get` slot of this descriptor returns the object's dictionary located at `tp_dictoffset`. Now suppose that data descriptors don't take precedence over instance variables. What would happend then if we put `'__dict__'` in the object's dictionary and assigned it some other dictionary:
+
+```pycon
+>>> a.__dict__['__dict__'] = {}
+```
+
+The `a.__dict__` attribute would return not the object's dictionary but the dictionary we assigned! That would be totally unexpected for someone who relies on `__dict__`. Fortunately, data descriptors do take precedence over instance variables, so we get the object's dictionary:
+
+```pycon
+>>> a.__dict__
+{'x': 'instance attribute', 'g': <function <lambda> at 0x108a4cc10>, '__dict__': {}}
+```
+
+Non-data descriptors don't take precedence over instance variables, so that most of the time instance variables have a priority over type variables. Of course, the existing order of precedence is one of many design choices. Guido van Rossum explains the reasoning behind it in [PEP 252](https://www.python.org/dev/peps/pep-0252/):
+
+> In the more complicated case, there's a conflict between names stored in the instance dict and names stored in the type dict. If both dicts have an entry with the same key, which one should we return? Looking at classic Python for guidance, I find conflicting rules: for class instances, the instance dict overrides the class dict, **except** for the special attributes (like `__dict__` and `__class__`), which have priority over the instance dict.
+>
+> I resolved this with the following set of rules, implemented in `PyObject_GenericGetAttr()`: ...
+
+**Why is the `__dict__` attribute implemented as a descriptor in the first place?** Making it an instance variable would lead to the same problem. It would be possible to override the `__dict__` attribute and hardly anyone wants to have this possibility.
 
 --
 
