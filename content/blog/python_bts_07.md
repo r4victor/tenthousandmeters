@@ -809,6 +809,194 @@ Non-data descriptors don't take precedence over instance variables, so that most
 
 **Why is the `__dict__` attribute implemented as a descriptor in the first place?** Making it an instance variable would lead to the same problem. It would be possible to override the `__dict__` attribute and hardly anyone wants to have this possibility.
 
+We've learned how attributes of an ordinary object work. Let's see now how attributes of a type work.
+
+## Type attributes
+
+Basically, attributes of a type work just like attributes of an ordinary object. When we set an attribute of a type to some value, CPython puts the value in the type's dictionary:
+
+```pycon
+>>> B.x = 'class attribute'
+>>> B.__dict__
+mappingproxy({'__module__': '__main__', '__doc__': None, 'x': 'class attribute'})
+```
+
+When we get the value of the attribute, CPython loads it from the type's dictionary:
+
+```pycon
+>>> B.x
+'class attribute'
+```
+
+If the type's dictionary doesn't contain the attribute, CPython loads the value from the metatype's dictionary:
+
+```pycon
+>>> B.__class__
+<class 'type'>
+>>> B.__class__ is object.__class__
+True
+```
+
+Finally, if the metatype's dictionary doesn't contain the attribute either, CPython searches for the value in the dictionaries of metatype's parents... The analogy with the generic implementation is clear. We just change the words "object" with "type" and "type" with "metatype". However, we said before that `type` implements the `tp_getattro` and `tp_setattro` slots in its own way. Why? Let's take a look at the code.
+
+### type_setattro()
+
+We begin with the `type_setattro()` function, an implementation of the `tp_setattro` slot:
+
+```C
+static int
+type_setattro(PyTypeObject *type, PyObject *name, PyObject *value)
+{
+    int res;
+    if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "can't set attributes of built-in/extension type '%s'",
+            type->tp_name);
+        return -1;
+    }
+    if (PyUnicode_Check(name)) {
+        if (PyUnicode_CheckExact(name)) {
+            if (PyUnicode_READY(name) == -1)
+                return -1;
+            Py_INCREF(name);
+        }
+        else {
+            name = _PyUnicode_Copy(name);
+            if (name == NULL)
+                return -1;
+        }
+        // ...
+    }
+    else {
+        /* Will fail in _PyObject_GenericSetAttrWithDict. */
+        Py_INCREF(name);
+    }
+  	
+  	// Call the generic set function.
+    res = _PyObject_GenericSetAttrWithDict((PyObject *)type, name, value, NULL);
+    if (res == 0) {
+        PyType_Modified(type);
+
+      	// If attribute is a special method,
+      	// add update the corresponding slots.
+        if (is_dunder_name(name)) {
+            res = update_slot(type, name);
+        }
+        assert(_PyType_CheckConsistency(type));
+    }
+    Py_DECREF(name);
+    return res;
+}
+```
+
+We can see that this function calls generic `_PyObject_GenericSetAttrWithDict()`, but it does something else too. It checks whether the attribute to be set is a special method. If the attribute is a special method, it updates the slots corresponding to that special method. For example, if we define the `__add__()` special method on an existing class, CPython will set the `nb_add` slot of the class to the default implementation that calls the method. Due to this mechanism, special methods and slots of a class are kept in sync.
+
+### type_getattro()
+
+
+
+```C
+/* This is similar to PyObject_GenericGetAttr(),
+   but uses _PyType_Lookup() instead of just looking in type->tp_dict. */
+static PyObject *
+type_getattro(PyTypeObject *type, PyObject *name)
+{
+    PyTypeObject *metatype = Py_TYPE(type);
+    PyObject *meta_attribute, *attribute;
+    descrgetfunc meta_get;
+    PyObject* res;
+
+    if (!PyUnicode_Check(name)) {
+        PyErr_Format(PyExc_TypeError,
+                     "attribute name must be string, not '%.200s'",
+                     Py_TYPE(name)->tp_name);
+        return NULL;
+    }
+
+    /* Initialize this type (we'll assume the metatype is initialized) */
+    if (type->tp_dict == NULL) {
+        if (PyType_Ready(type) < 0)
+            return NULL;
+    }
+
+    /* No readable descriptor found yet */
+    meta_get = NULL;
+
+    /* Look for the attribute in the metatype */
+    meta_attribute = _PyType_Lookup(metatype, name);
+
+    if (meta_attribute != NULL) {
+        Py_INCREF(meta_attribute);
+        meta_get = Py_TYPE(meta_attribute)->tp_descr_get;
+
+        if (meta_get != NULL && PyDescr_IsData(meta_attribute)) {
+            /* Data descriptors implement tp_descr_set to intercept
+             * writes. Assume the attribute is not overridden in
+             * type's tp_dict (and bases): call the descriptor now.
+             */
+            res = meta_get(meta_attribute, (PyObject *)type,
+                           (PyObject *)metatype);
+            Py_DECREF(meta_attribute);
+            return res;
+        }
+    }
+
+    /* No data descriptor found on metatype. Look in tp_dict of this
+     * type and its bases */
+    attribute = _PyType_Lookup(type, name);
+    if (attribute != NULL) {
+        /* Implement descriptor functionality, if any */
+        Py_INCREF(attribute);
+        descrgetfunc local_get = Py_TYPE(attribute)->tp_descr_get;
+
+        Py_XDECREF(meta_attribute);
+
+        if (local_get != NULL) {
+            /* NULL 2nd argument indicates the descriptor was
+             * found on the target object itself (or a base)  */
+            res = local_get(attribute, (PyObject *)NULL,
+                            (PyObject *)type);
+            Py_DECREF(attribute);
+            return res;
+        }
+
+        return attribute;
+    }
+
+    /* No attribute found in local __dict__ (or bases): use the
+     * descriptor from the metatype, if any */
+    if (meta_get != NULL) {
+        PyObject *res;
+        res = meta_get(meta_attribute, (PyObject *)type,
+                       (PyObject *)metatype);
+        Py_DECREF(meta_attribute);
+        return res;
+    }
+
+    /* If an ordinary attribute was found on the metatype, return it now */
+    if (meta_attribute != NULL) {
+        return meta_attribute;
+    }
+
+    /* Give up */
+    PyErr_Format(PyExc_AttributeError,
+                 "type object '%.50s' has no attribute '%U'",
+                 type->tp_name, name);
+    return NULL;
+}
+```
+
+
+
+ It indeed repeats the logic of the generic implementation, but with three important differences:
+
+* It gets the type's dictionary via `tp_dict`. The generic implementation would try to locate it using metatype's `tp_dictoffset`.
+* It searches for the type variable not only in type's dictionary but also in the dictionaries of type's parents. The generic implementation would handle a type like an ordinary object that has no notions of inheritance.
+* 
+
+
+
 --
 
 Sometimes, though, the generic implementation is not that straightforward. For example, some attributes of an object seem to belong to the object, but they are not in the object's dictionary. An example of such attribute is `__dict__` itself:
