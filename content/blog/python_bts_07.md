@@ -894,7 +894,7 @@ We can see that this function calls generic `_PyObject_GenericSetAttrWithDict()`
 
 ### type_getattro()
 
-
+The `type_getattro()` function, an implemenation of the `tp_getattro` slot, resembles the generic function:
 
 ```C
 /* This is similar to PyObject_GenericGetAttr(),
@@ -987,13 +987,23 @@ type_getattro(PyTypeObject *type, PyObject *name)
 }
 ```
 
-
-
- It indeed repeats the logic of the generic implementation, but with three important differences:
+This algorithm indeed repeats the logic of the generic implementation, but with three important differences:
 
 * It gets the type's dictionary via `tp_dict`. The generic implementation would try to locate it using metatype's `tp_dictoffset`.
 * It searches for the type variable not only in type's dictionary but also in the dictionaries of type's parents. The generic implementation would handle a type like an ordinary object that has no notions of inheritance.
-* 
+* It supports type descriptors. The generic implementation would support only metatype descriptors.
+
+As a result, we have the following order of precedence:
+
+1. metatype data descriptors
+2. type descriptors and other type variables
+3. metatype non-data descriptors and other metatype variables.
+
+That's how `type` implements the `tp_getattro` and `tp_setattro` slots. Attributes of most types work according to this implementation, since `type` is the metatype of all built-in types and the metatype of all classes by default. Classes themselves, as we've already said, use the generic implementation by default. If we want to change the behavior of attribues of a class instance or the behavior of attributes of a class, we need to define a new class or a new metaclass that uses a custom implementation. Python provides an easy way to do this.
+
+## Custom attribute management
+
+The `tp_getattro` and `tp_setattro` slots of a class are initially set by the `type_new()` function that creates new classes. The generic implementationd is its default choice. A class can customize attribute access, assignment and deletion by defining the `__getattribute__()`, `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. When a class defines `__setattr__()` or `__delattr__()`, its `tp_setattro` slot is set to the `slot_tp_setattro()` function. When a class defines  `__getattribute__()` or `__getattr__()`, its `tp_getattro` slot is set to the `slot_tp_getattr_hook()` function.
 
 
 
