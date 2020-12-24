@@ -1005,7 +1005,92 @@ That's how `type` implements the `tp_getattro` and `tp_setattro` slots. Attribut
 
 The `tp_getattro` and `tp_setattro` slots of a class are initially set by the `type_new()` function that creates new classes. The generic implementationd is its default choice. A class can customize attribute access, assignment and deletion by defining the `__getattribute__()`, `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. When a class defines `__setattr__()` or `__delattr__()`, its `tp_setattro` slot is set to the `slot_tp_setattro()` function. When a class defines  `__getattribute__()` or `__getattr__()`, its `tp_getattro` slot is set to the `slot_tp_getattr_hook()` function.
 
+The `__setattr__()` and `__delattr__()` special methods are quite straightforward. Basically, they allow us to implement the `tp_setattro` slot in Python. The `slot_tp_setattro()` function simply calls `__delattr__(instance, attr_name)` or `__setattr__(instance, attr_name, value)` depending on whether the `value` is `NULL` or not:
 
+```C
+static int
+slot_tp_setattro(PyObject *self, PyObject *name, PyObject *value)
+{
+    PyObject *stack[3];
+    PyObject *res;
+    _Py_IDENTIFIER(__delattr__);
+    _Py_IDENTIFIER(__setattr__);
+
+    stack[0] = self;
+    stack[1] = name;
+    if (value == NULL) {
+        res = vectorcall_method(&PyId___delattr__, stack, 2);
+    }
+    else {
+        stack[2] = value;
+        res = vectorcall_method(&PyId___setattr__, stack, 3);
+    }
+    if (res == NULL)
+        return -1;
+    Py_DECREF(res);
+    return 0;
+}
+```
+
+The `__getattribute__()` and `__getattr__()` special methods provide a way to customize attribute access. Both take an instance and an attribute name as their parameters and have to return the attribute value. The difference between them is when they get invoked.
+
+The `__getattribute__()` special method is the analog of  `__setattr__()` and `__delattr__()` for getting the value of an attribute. It's invoked instead of the generic function. The `__getattr__()` special method is used in tandem with `__getattribute__()` or the generic function. It's invoked when  `__getattribute__()` or the generic function raise `AttributeError`. This logic is implemented in the `slot_tp_getattr_hook()` function:
+
+```C
+static PyObject *
+slot_tp_getattr_hook(PyObject *self, PyObject *name)
+{
+    PyTypeObject *tp = Py_TYPE(self);
+    PyObject *getattr, *getattribute, *res;
+    _Py_IDENTIFIER(__getattr__);
+
+    getattr = _PyType_LookupId(tp, &PyId___getattr__);
+    if (getattr == NULL) {
+        /* No __getattr__ hook: use a simpler dispatcher */
+        tp->tp_getattro = slot_tp_getattro;
+        return slot_tp_getattro(self, name);
+    }
+    Py_INCREF(getattr);
+
+    getattribute = _PyType_LookupId(tp, &PyId___getattribute__);
+    if (getattribute == NULL ||
+        (Py_IS_TYPE(getattribute, &PyWrapperDescr_Type) &&
+         ((PyWrapperDescrObject *)getattribute)->d_wrapped ==
+         (void *)PyObject_GenericGetAttr))
+        res = PyObject_GenericGetAttr(self, name);
+    else {
+        Py_INCREF(getattribute);
+        res = call_attribute(self, getattribute, name);
+        Py_DECREF(getattribute);
+    }
+    if (res == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+        PyErr_Clear();
+        res = call_attribute(self, getattr, name);
+    }
+    Py_DECREF(getattr);
+    return res;
+}
+```
+
+Let's translate the code to English:
+
+1. If the class doesn't define `__getattr__()`, first set its `tp_getattro` slot to another function, `slot_tp_getattro()`, then call this function and return the result of the call.
+2. If the class defines `__getattribute__()`, call it. Otherwise call generic `PyObject_GenericGetAttr()`.
+3. If the call from the previous step raised `AttributeError`, call `___getattr__()`.
+4. Return the result of the last call.
+
+The `slot_tp_getattro()` function is an implementation of the `tp_getattro` slot that CPython uses when a class defines `__getattribute__()`  but not `__getattr__()`. It just calls `__getattribute__()`:
+
+```C
+static PyObject *
+slot_tp_getattro(PyObject *self, PyObject *name)
+{
+    PyObject *stack[2] = {self, name};
+    return vectorcall_method(&PyId___getattribute__, stack, 2);
+}
+```
+
+Why doesn't CPython set the `tp_getattro` slot to the `slot_tp_getattro()` function instead of  `slot_tp_getattr_hook()` initially? The reason is the design of the mechanism that maps special methods to slots. It requires special methods that map to the same slot to provide the same implementation for that slot. And the `__getattribute__()` and `__getattr__()` special methods map to the same `tp_getattro` slot.
 
 --
 
