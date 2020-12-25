@@ -514,7 +514,7 @@ AttributeError: 'int' object has no attribute '__dict__'
 
 Typically, classes have a non-zero `tp_dictoffset`. The only exception is classes that define the `__slots__` attribute. This attribute is an optimization. We'll cover the essentials first and disccus `__slots__` later.
 
-A type's dictionary is a dictionary of a type object. Just like the `func_dict` member of a function points to the function's dictionary, the `tp_dict` slot of a type points to the type's dictionary. The crucial difference between the dictionary of an ordinary object and the dictionary of a type is that CPython knows about `tp_dict`, so it doesn't need to locate the dictionary of a type via `tp_dictoffset`. Since `tp_dictoffset` of `type` is unnecessary, it's set to `0`. Handling the type's dictionary in a general way would indroduce an additional level of indirection and, as we'll see, wouldn't bring much benefit.
+A type's dictionary is a dictionary of a type object. Just like the `func_dict` member of a function points to the function's dictionary, the `tp_dict` slot of a type points to the type's dictionary. The crucial difference between the dictionary of an ordinary object and the dictionary of a type is that CPython knows about `tp_dict`, so it can avoid locating the dictionary of a type via `tp_dictoffset`. Handling the type's dictionary in a general way would indroduce an additional level of indirection and wouldn't brings much benefit.
 
 Now, when we know what descriptors are and where attributes are stored, we're ready to see what the `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()` functions do.
 
@@ -621,12 +621,16 @@ We haven't discussed the descriptors that implement the `tp_descr_set` slot, so 
 class C:
     def __init__(self):
         self._x = None
+        
     def getx(self):
         return self._x
+      
     def setx(self, value):
         self._x = value
+        
     def delx(self):
         del self._x
+        
     x = property(getx, setx, delx, "I'm the 'x' property.")
 ```
 
@@ -890,7 +894,16 @@ type_setattro(PyTypeObject *type, PyObject *name, PyObject *value)
 }
 ```
 
-We can see that this function calls generic `_PyObject_GenericSetAttrWithDict()`, but it does something else too. It checks whether the attribute to be set is a special method. If the attribute is a special method, it updates the slots corresponding to that special method. For example, if we define the `__add__()` special method on an existing class, CPython will set the `nb_add` slot of the class to the default implementation that calls the method. Due to this mechanism, special methods and slots of a class are kept in sync.
+We can see that this function calls generic `_PyObject_GenericSetAttrWithDict()`, but it does something else too. First, it ensures that the type is not a statically defined type because such types are designed to be immutable:
+
+```pycon
+>>> int.x = 2
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+TypeError: can't set attributes of built-in/extension type 'int'
+```
+
+It also checks whether the attribute is a special method. If the attribute is a special method, it updates the slots corresponding to that special method. For example, if we define the `__add__()` special method on an existing class, CPython will set the `nb_add` slot of the class to the default implementation that calls the method. Due to this mechanism, special methods and slots of a class are kept in sync.
 
 ### type_getattro()
 
@@ -1119,6 +1132,22 @@ class IMAP4:
 Achieving the same result with `__getattribute__()` would require us to explicitly call the generic function first: `object.__getattribute__(self, attr)`. Is this inconvenient enough to introduce another special method? Perhaps. The real reason, tough, why both `__getattribute__()` and `__getattr__()` exist is historical. The `__getattribute__()`  special method was [indroduced in Python 2.2](https://docs.python.org/3/whatsnew/2.2.html#attribute-access) when `__getattr__()` had already existed. Here's how Guido van Rossum [explained](https://www.python.org/download/releases/2.2/descrintro/) the need for the new feature:
 
 > The `__getattr__()` method is not really the implementation for the get-attribute operation; it is a hook that only gets invoked when an attribute cannot be found by normal means. This has often been cited as a shortcoming - some class designs have a legitimate need for a get-attribute method that gets called for *all* attribute references, and this problem is solved now by making `__getattribute__()` available.
+
+In the beginning of this post we asked: What happens when we get or set an attribute of a Python object? I think we gave a detailed answer to this question. The answer, hovewer, doesn't cover some of the important aspects of Python attributes. Let's discuss them as well.
+
+## Listing attributes of an object
+
+We can see what attributes an object has by calling the built-in [`dir()`](https://docs.python.org/3/library/functions.html#dir) function on the object. Have you ever wondered how this function finds the attributes? It's implemented by calling the `__dir__()` special method of the object's type. Types rarely define their own `__dir__()`, yet all the types have it. This is because the `object` type defines `__dir__()`, and all other types inherit from `object`.  The implementation provided by `object` lists all the attributes stored in the object's dictionary, in the type's dictionary and in the dictionaries of type's parents. So, `dir()` effectively returns all the attributes of an ordinary object. However, when we call `dir()` on a type, we don't get all its attributes. This is because `type` provides its own implementation of `__dir__()`. This implementation returns attributes stored in the type's dictionary and in the dictionaries of type's parents. It, however, ignores attributes stored in the metatype's dictionary and in the dictionaries of metatype's parents. The documentation [explains](https://docs.python.org/3/library/functions.html#dir) why this is the case:
+
+> Because `dir()` is supplied primarily as a convenience for use at an interactive prompt, it tries to supply an interesting set of names more than it tries to supply a rigorously or consistently defined set of names, and its detailed behavior may change across releases. For example, metaclass attributes are not in the result list when the argument is a class.
+
+## Where attributes of types come from
+
+We define a 
+
+## \__slots__
+
+
 
 --
 
