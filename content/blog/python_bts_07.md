@@ -1092,6 +1092,34 @@ slot_tp_getattro(PyObject *self, PyObject *name)
 
 Why doesn't CPython set the `tp_getattro` slot to the `slot_tp_getattro()` function instead of  `slot_tp_getattr_hook()` initially? The reason is the design of the mechanism that maps special methods to slots. It requires special methods that map to the same slot to provide the same implementation for that slot. And the `__getattribute__()` and `__getattr__()` special methods map to the same `tp_getattro` slot.
 
+Even a perfect understanding of how the  `__getattribute__()` and `__getattr__()` special methods work doesn't tell us why we need both. Theoretically, we can make attribute access work in any way we want by defining `__getattribute__()`. Sometimes, though, it's more convinient to define `__getattr__()`. For example, the standard [`imaplib`](https://docs.python.org/3/library/imaplib.html#module-imaplib) module provides the `IMAP4` class that can be used to talk to a IMAP4 server. To issue IMAP4 commands, we call the class methods. Both lowercase and uppercase variants of the commands work:
+
+```pycon
+>>> from imaplib import IMAP4_SSL # subclass of IMAP4
+>>> M = IMAP4_SSL("imap.gmail.com", port=993)
+>>> M.noop()
+('OK', [b'Nothing Accomplished. p11mb154389070lti'])
+>>> M.NOOP()
+('OK', [b'Nothing Accomplished. p11mb154389070lti'])
+```
+
+This is because `IMAP4` defines `__getattr__()`:
+
+```python
+class IMAP4:
+    # ...
+    def __getattr__(self, attr):
+        #       Allow UPPERCASE variants of IMAP4 command methods.
+        if attr in Commands:
+            return getattr(self, attr.lower())
+        raise AttributeError("Unknown IMAP4 command: '%s'" % attr)
+    # ...
+```
+
+Achieving the same result with `__getattribute__()` would require us to explicitly call the generic function first: `object.__getattribute__(self, attr)`. Is this inconvenient enough to introduce another special method? Perhaps. The real reason, tough, why both `__getattribute__()` and `__getattr__()` exist is historical. The `__getattribute__()`  special method was [indroduced in Python 2.2](https://docs.python.org/3/whatsnew/2.2.html#attribute-access) when `__getattr__()` had already existed. Here's how Guido van Rossum [explained](https://www.python.org/download/releases/2.2/descrintro/) the need for the new feature:
+
+> The `__getattr__()` method is not really the implementation for the get-attribute operation; it is a hook that only gets invoked when an attribute cannot be found by normal means. This has often been cited as a shortcoming - some class designs have a legitimate need for a get-attribute method that gets called for *all* attribute references, and this problem is solved now by making `__getattribute__()` available.
+
 --
 
 Sometimes, though, the generic implementation is not that straightforward. For example, some attributes of an object seem to belong to the object, but they are not in the object's dictionary. An example of such attribute is `__dict__` itself:
