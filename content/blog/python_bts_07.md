@@ -501,18 +501,23 @@ PyTypeObject PyFunction_Type = {
 };
 ```
 
-A positive value of `tp_dictoffset` specifies an offset from the start of the struct. A negative value specifies an offset from the end of the struct. The zero offset means that the object doesn't have the dictionary. For example, integers don't have dictionaries because `tp_dictoffset` of the `int` type is set to `0`:
+A positive value of `tp_dictoffset` specifies an offset from the start of the struct. A negative value specifies an offset from the end of the struct. The zero offset means that the object doesn't have the dictionary. For example, integers don't have dictionaries:
 
 ```pycon
 >>> (12).__dict__
 Traceback (most recent call last):
   File "<stdin>", line 1, in <module>
 AttributeError: 'int' object has no attribute '__dict__'
+```
+
+We can assure ourselves that `tp_dictoffset` of the `int` type is set to `0`:
+
+```pycon
 >>> int.__dictoffset__
 0
 ```
 
-Typically, classes have a non-zero `tp_dictoffset`. The only exception is classes that define the `__slots__` attribute. This attribute is an optimization. We'll cover the essentials first and disccus `__slots__` later.
+Classes usually have a non-zero `tp_dictoffset`. The only exception is classes that define the `__slots__` attribute. This attribute is an optimization. We'll cover the essentials first and disccus `__slots__` later.
 
 A type's dictionary is a dictionary of a type object. Just like the `func_dict` member of a function points to the function's dictionary, the `tp_dict` slot of a type points to the type's dictionary. The crucial difference between the dictionary of an ordinary object and the dictionary of a type is that CPython knows about `tp_dict`, so it can avoid locating the dictionary of a type via `tp_dictoffset`. Handling the type's dictionary in a general way would indroduce an additional level of indirection and wouldn't brings much benefit.
 
@@ -1133,7 +1138,41 @@ Achieving the same result with `__getattribute__()` would require us to explicit
 
 > The `__getattr__()` method is not really the implementation for the get-attribute operation; it is a hook that only gets invoked when an attribute cannot be found by normal means. This has often been cited as a shortcoming - some class designs have a legitimate need for a get-attribute method that gets called for *all* attribute references, and this problem is solved now by making `__getattribute__()` available.
 
-In the beginning of this post we asked: What happens when we get or set an attribute of a Python object? I think we gave a detailed answer to this question. The answer, hovewer, doesn't cover some of the important aspects of Python attributes. Let's discuss them as well.
+What happens when we get or set an attribute of a Python object? I think we gave a detailed answer to this question. The answer, hovewer, doesn't cover some important aspects of Python attributes. Let's discuss them as well.
+
+## Loading methods
+
+We saw that a function object is a descriptor that returns a method object when we bound it to an instance:
+
+```pycon
+>>> a.f
+<bound method <lambda> of <__main__.A object at 0x108a20d60>>
+```
+
+But is it really necessary to create a method object if all we need to do is to call the method? Couldn't CPython just call the original function with the instance as the first argument? It could. In fact, this is exactly what CPython does.
+
+When the compiler sees the method call with positional arguments like `obj.method(arg1,...,argN)`, it does not produce the `LOAD_ATTR` opcode to load the method and the `CALL_FUNCTION` opcode to call the method. Instead, it produces a pair of the `LOAD_METHOD` and `CALL_METHOD` opcodes:
+
+```text
+$ echo 'obj.method()' | python3 -m dis
+  1           0 LOAD_NAME                0 (obj)
+              2 LOAD_METHOD              1 (method)
+              4 CALL_METHOD              0
+...
+```
+
+When the VM executes the `LOAD_METHOD` opcode, it calls the `_PyObject_GetMethod()` function to search for the attribute value. This function works just like the generic function. The only difference is that it checks whether the value is an unbound method, i.e. a descriptor that returns a method-like object bound to the instance. In this case, it doesn't call the `tp_descr_get` slot of the descriptor's type but returns the descriptor itself. For example, if the attribute value is a function, `_PyObject_GetMethod()` returns the function. The `function` type and other descriptor types whose objects act as unbound methods specify the [`Py_TPFLAGS_METHOD_DESCRIPTOR`](https://www.python.org/dev/peps/pep-0590/#descriptor-behavior) flag in their `tp_flags`, so it's easy to identify them.
+
+It should be noted that `_PyObject_GetMethod()` works as described only when the object's type uses the generic implementation of `tp_getattro`. Otherwise, it just calls the custom implementation and doesn't perform any checks. 
+
+If `_PyObject_GetMethod()` finds an unbound method, the method must be called with the instance prepended to the list of arguments. If it finds some other callable that doesn't need to be bound to the instance, the list of arguments must be kept unchanged. Therefore, after the VM has executed `LOAD_METHOD`, the values on the stack can be arranged in one of two ways:
+
+* an unbound method and a list of arguments including the instance: `(method | self | arg1 | ... | argN)`
+* other callable and a list of arguments without the instance `(NULL | method | arg1 | ... | argN)`
+
+The `CALL_METHOD` opcode exists to call the method appropriately in each of these cases.
+
+To learn more about this optimization, check out [the issue](https://bugs.python.org/issue26110) that originated it.
 
 ## Listing attributes of an object
 
@@ -1143,11 +1182,140 @@ We can see what attributes an object has by calling the built-in [`dir()`](https
 
 ## Where attributes of types come from
 
-We define a 
+Take any built-in type and list its attributes. You'll get quite a few:
+
+```pycon
+>>> dir(object)
+['__class__', '__delattr__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__le__', '__lt__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__']
+>>> dir(int)
+['__abs__', '__add__', '__and__', '__bool__', '__ceil__', '__class__', '__delattr__', '__dir__', '__divmod__', '__doc__', '__eq__', '__float__', '__floor__', '__floordiv__', '__format__', '__ge__', '__getattribute__', '__getnewargs__', '__gt__', '__hash__', '__index__', '__init__', '__init_subclass__', '__int__', '__invert__', '__le__', '__lshift__', '__lt__', '__mod__', '__mul__', '__ne__', '__neg__', '__new__', '__or__', '__pos__', '__pow__', '__radd__', '__rand__', '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__rfloordiv__', '__rlshift__', '__rmod__', '__rmul__', '__ror__', '__round__', '__rpow__', '__rrshift__', '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__setattr__', '__sizeof__', '__str__', '__sub__', '__subclasshook__', '__truediv__', '__trunc__', '__xor__', 'as_integer_ratio', 'bit_length', 'conjugate', 'denominator', 'from_bytes', 'imag', 'numerator', 'real', 'to_bytes']
+```
+
+We saw last time that the special methods that correspond to slots are added automatically by the `PyType_Ready()` function that initializes types. Where do the rest attributes come from? They all must be specified somehow and then be set to something at some point. This is a vague statement. Let's make it clear.
+
+The most straightforward way to specify attributes of a type is to create a new dictionary, populate it with attributes and set type's `tp_dict`  to that dictionary. We cannot do that before we define built-in types, so `tp_dict` of built-in types is initilized to `NULL`. It turns out that `PyType_Ready()` creates dictionaries of built-in types in runtime. It is also responsible for adding all the attributes.
+
+First, `PyType_Ready()` ensures that a type has a dictionary. Then, it adds attributes to the dictionary. A type tells `PyType_Ready()`  which attributes to add by specifying the [`tp_methods`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_methods), [`tp_members`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_members) and [`tp_getset`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_getset) slots. Each slot is an array of structs that describe different kinds of attributes.
+
+### tp_methods
+
+The `tp_methods` slot is an array of the `PyMethodDef` structs that describe methods:
+
+```C
+struct PyMethodDef {
+    const char  *ml_name;   /* The name of the built-in function/method */
+    PyCFunction ml_meth;    /* The C function that implements it */
+    int         ml_flags;   /* Combination of METH_xxx flags, which mostly
+                               describe the args expected by the C func */
+    const char  *ml_doc;    /* The __doc__ attribute, or NULL */
+};
+typedef struct PyMethodDef PyMethodDef;
+```
+
+The `ml_meth` member is a pointer to a C function that implements the method. Its signature can be one of many. The `ml_flags` bitfield is used to tell CPython how to call the function.
+
+For each struct in `tp_methods`, `PyType_Ready()` adds a callable object to the type's dictionary. This object encapsulates the struct. When we call it, the function pointed by `ml_meth` gets invoked. This is basically how a C function becomes a method of a Python type.
+
+The `object` type, for example, defines `__dir__()` and a bunch of other methods using this mechanism:
+
+```C
+static PyMethodDef object_methods[] = {
+    {"__reduce_ex__", (PyCFunction)object___reduce_ex__, METH_O, object___reduce_ex____doc__},
+    {"__reduce__", (PyCFunction)object___reduce__, METH_NOARGS, object___reduce____doc__},
+    {"__subclasshook__", object_subclasshook, METH_CLASS | METH_VARARGS,
+     object_subclasshook_doc},
+    {"__init_subclass__", object_init_subclass, METH_CLASS | METH_NOARGS,
+     object_init_subclass_doc},
+    {"__format__", (PyCFunction)object___format__, METH_O, object___format____doc__},
+    {"__sizeof__", (PyCFunction)object___sizeof__, METH_NOARGS, object___sizeof____doc__},
+    {"__dir__", (PyCFunction)object___dir__, METH_NOARGS, object___dir____doc__},
+    {0}
+};
+```
+
+The callable object added to the dictionary is usually a method descriptor. We should probably discuss what a method descriptor is in another post on Python callables, but essentially it is an object that behaves like a function object, i.e. it can be bound to an instance. The major difference is that a function bound to an instance returns a method object, and a method descriptor bound to an instance returns a built-in method object. A method object encapsulates a Python function and an instance, and a built-in method object encapsulates a C function and an instance.
+
+For example, `object.__dir__` is a method descriptor:
+
+```pycon
+>>> object.__dir__
+<method '__dir__' of 'object' objects>
+>>> type(object.__dir__)
+<class 'method_descriptor'>
+```
+
+If we bind `__dir__ ` to an instance, we get a built-in method object:
+
+```pycon
+>>> object().__dir__
+<built-in method __dir__ of object object at 0x1088cc420>
+>>> type(object().__dir__)
+<class 'builtin_function_or_method'>
+```
+
+If `ml_flags` flags specifies that the method is static, a built-in method object is added to the dictionary instead of a method descriptor straight away.
+
+Every method of any built-in type is either wraps some slot or added to the dictionary by the described mechanism.
+
+### tp_members
+
+The `tp_members` slot is an array of the `PyMemberDef` structs. Each struct describes an attribute that exposes a C member of objects of the type:
+
+```C
+typedef struct PyMemberDef {
+    const char *name;
+    int type;
+    Py_ssize_t offset;
+    int flags;
+    const char *doc;
+} PyMemberDef;
+```
+
+The member is specified by `offset`. Its type is specified by `type`.
+
+For each struct in `tp_members`, `PyType_Ready()` adds a member descriptor to the type's dictionary. A member descriptor is a data descriptor that encapsulates `PyMemberDef`. Its `tp_descr_get` slot takes an instance, finds the member of the instance located at `offset`, converts it to a corresponding Python object and returns the object. Its `tp_descr_set` slot takes an instance and a value, finds the member of the instance located at `offset` and sets it to the C equivalent of the value. A member can be made read-only by specifying `flags`.
+
+By this mechanism, for example, `type` defines `__dictoffset__` and other members:
+
+```C
+static PyMemberDef type_members[] = {
+    {"__basicsize__", T_PYSSIZET, offsetof(PyTypeObject,tp_basicsize),READONLY},
+    {"__itemsize__", T_PYSSIZET, offsetof(PyTypeObject, tp_itemsize), READONLY},
+    {"__flags__", T_ULONG, offsetof(PyTypeObject, tp_flags), READONLY},
+    {"__weakrefoffset__", T_PYSSIZET,
+     offsetof(PyTypeObject, tp_weaklistoffset), READONLY},
+    {"__base__", T_OBJECT, offsetof(PyTypeObject, tp_base), READONLY},
+    {"__dictoffset__", T_PYSSIZET,
+     offsetof(PyTypeObject, tp_dictoffset), READONLY},
+    {"__mro__", T_OBJECT, offsetof(PyTypeObject, tp_mro), READONLY},
+    {0}
+};
+
+```
+
+
+
+
+
+```C
+typedef struct PyGetSetDef {
+    const char *name;
+    getter get;
+    setter set;
+    const char *doc;
+    void *closure;
+} PyGetSetDef;
+```
+
+The `__di
+
+
 
 ## \__slots__
 
+## Summary
 
+We began our investigation by looking at the `LOAD_ATTR`, `STORE_ATTR` and `DELETE_ATTR` opcodes that the compiler produces to work with attributes. Then we learned that the VM calls the `tp_getattro` and `tp_setattro` slots of the object's type to execute the opcodes and studied the three most important implementations of these slots. That c
 
 --
 
@@ -1177,4 +1345,6 @@ You may recognize that `A.__dict__['__dict__']` is a descriptor. Descriptors are
 > Understanding descriptors is a key to a deep understanding of Python because they are the basis for many features including functions, methods, properties, class methods, static methods, and reference to super classes.
 
 We've already mentioned descriptors in the previous part. This time, let's study them more thoroughly.
+
+
 
