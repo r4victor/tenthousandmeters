@@ -1212,7 +1212,7 @@ struct PyMethodDef {
 typedef struct PyMethodDef PyMethodDef;
 ```
 
-The `ml_meth` member is a pointer to a C function that implements the method. Its signature can be one of many. The `ml_flags` bitfield is used to tell CPython how to call the function.
+The `ml_meth` member is a pointer to a C function that implements the method. Its signature can be one of many. The `ml_flags` bitfield is used to tell CPython how exactly to call the function.
 
 For each struct in `tp_methods`, `PyType_Ready()` adds a callable object to the type's dictionary. This object encapsulates the struct. When we call it, the function pointed by `ml_meth` gets invoked. This is basically how a C function becomes a method of a Python type.
 
@@ -1255,7 +1255,7 @@ If we bind `__dir__ ` to an instance, we get a built-in method object:
 
 If `ml_flags` flags specifies that the method is static, a built-in method object is added to the dictionary instead of a method descriptor straight away.
 
-Every method of any built-in type is either wraps some slot or added to the dictionary by the described mechanism.
+Every method of any built-in type either wraps some slot or is added to the dictionary by the described mechanism.
 
 ### tp_members
 
@@ -1293,9 +1293,9 @@ static PyMemberDef type_members[] = {
 
 ```
 
+### tp_getset
 
-
-
+The `tp_getset` slot is an array of the `PyGetSetDef` structs that desribe arbitrary data descriptors like `property()`:
 
 ```C
 typedef struct PyGetSetDef {
@@ -1307,44 +1307,75 @@ typedef struct PyGetSetDef {
 } PyGetSetDef;
 ```
 
-The `__di
+For each struct in `tp_getset`, `PyType_Ready()` adds a getset descriptor to the type's dictionary. The `tp_descr_get`  slot of a getset descriptor calls the specified `get` function, and the `tp_descr_set`  slot of a getset descriptor calls the specified `set` function. 
 
+Types define the `__dict__` attribute using this mechanism. Here's, for example, how the `function` type does that:
 
+```C
+static PyGetSetDef func_getsetlist[] = {
+    {"__code__", (getter)func_get_code, (setter)func_set_code},
+    {"__defaults__", (getter)func_get_defaults,
+     (setter)func_set_defaults},
+    {"__kwdefaults__", (getter)func_get_kwdefaults,
+     (setter)func_set_kwdefaults},
+    {"__annotations__", (getter)func_get_annotations,
+     (setter)func_set_annotations},
+    {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict},
+    {"__name__", (getter)func_get_name, (setter)func_set_name},
+    {"__qualname__", (getter)func_get_qualname, (setter)func_set_qualname},
+    {NULL} /* Sentinel */
+};
 
-## \__slots__
+```
+
+The `__dict__` attribute is implemented not as a read-only member but as a geteset descriptor because it does more than simply return the dictionary located at `tp_dictoffset`. For instance, the descriptor creates the dictionary if it doesn't exist yet.
+
+Classes also get the `__dict__` attribute by this mechanism. The `type_new()` function that creates classes specifies `tp_getset` before it calls `PyType_Ready()`. Some classes, though, don't get this attribute because their instances don't have dictionaries. These are the classes that define the `__slots__` attribute.
+
+## How \__slots__ works
+
+The [`__slots__`](https://docs.python.org/3/reference/datamodel.html#slots) attribute of a class enumerates the attributes that the class can have:
+
+```pycon
+>>> class D:
+...     __slots__ = ('x', 'y')
+...
+```
+
+If a class defines `__slots__`, the `__dict__` attribute is not added to the class's dictionary and its `tp_dictoffset` is set to `0`. The main effect of this is that the class instances don't have dictionaries:
+
+```pycon
+>>> D.__dictoffset__
+0
+>>> d = D()
+>>> d.__dict__
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+AttributeError: 'D' object has no attribute '__dict__'
+```
+
+However, the attributes listed in `__slots__` work fine:
+
+```pycon
+>>> d.x = 4
+>>> d.x
+4
+```
+
+How is that possible? The attributes listed in `__slots__` become members of class instances. For each member, the member descriptor is added to the class dictionary. The `type_new()` function specifies `tp_members` to do that. 
+
+```pycon
+>>> D.x
+<member 'x' of 'D' objects>
+```
+
+The  `__slots__` attributes saves memory since instances don't have dictionaries. According to [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#member-objects-and-slots),
+
+> On a 64-bit Linux build, an instance with two attributes takes 48 bytes with `__slots__` and 152 bytes without.
+
+The giude also gives other benefits of using `__slots__`. I recommend you check them out.
 
 ## Summary
 
 We began our investigation by looking at the `LOAD_ATTR`, `STORE_ATTR` and `DELETE_ATTR` opcodes that the compiler produces to work with attributes. Then we learned that the VM calls the `tp_getattro` and `tp_setattro` slots of the object's type to execute the opcodes and studied the three most important implementations of these slots. That c
-
---
-
-Sometimes, though, the generic implementation is not that straightforward. For example, some attributes of an object seem to belong to the object, but they are not in the object's dictionary. An example of such attribute is `__dict__` itself:
-
-```pycon
->>> a.__dict__
-{'x': 'instance attribute'} # __dict__ isn't here
-```
-
-Where does object's `__dict__ ` come from? Let's take a look at the type's dictionary:
-
-```pycon
->>> A.__dict__
-mappingproxy({'__module__': '__main__', '__dict__': <attribute '__dict__' of 'A' objects>, '__weakref__': <attribute '__weakref__' of 'A' objects>, '__doc__': None, 'y': 'class attribute'})
-```
-
-It contains the `'__dict__'` key. The value of this key is what we are looking for. If we call its `__get__()` method with the object as the argument, we'll get the object's dictionary:
-
-```pycon
->>> A.__dict__['__dict__'].__get__(a)
-{'x': 'instance attribute'}
-```
-
-You may recognize that `A.__dict__['__dict__']` is a descriptor. Descriptors are what makes the generic implementation a bit complex. But they also make it powerfull. As Python's glossary [says](https://docs.python.org/3/glossary.html#term-descriptor),
-
-> Understanding descriptors is a key to a deep understanding of Python because they are the basis for many features including functions, methods, properties, class methods, static methods, and reference to super classes.
-
-We've already mentioned descriptors in the previous part. This time, let's study them more thoroughly.
-
-
 
