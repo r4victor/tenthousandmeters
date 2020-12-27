@@ -2,9 +2,9 @@ Title: Python behind the scenes #7: how Python attributes work
 Date: 2020-12-15 6:25
 Tags: Python behind the scenes, Python, CPython
 
-What happens when we get or set an attribute of a Python object? This question is not as simple as it may seem at first. It's true that any experienced Python programmer has a good intuitive understanding of how attributes work, and the documentation helps a lot to strengthen the understanding. Yet, when a really non-trivial question regarding attributes comes up, the intuition fails and the documentation can no longer help. Even a question as basic as "What is an attribute?" fits into that category. To gain a deep understanding and be able to answer such questions, one has to study how attributes are implemented. That's what we're going to do today.
+What happens when we get or set an attribute of a Python object? This question is not as simple as it may seem at first. It is true that any experienced Python programmer has a good intuitive understanding of how attributes work, and the documentation helps a lot to strengthen the understanding. Yet, when a really non-trivial question regarding attributes comes up, the intuition fails and the documentation can no longer help. Even a question as basic as "What is an attribute?" may cause some difficulties. To gain a deep understanding and be able to answer such questions, one has to study how attributes are implemented. That's what we're going to do today.
 
-## A brief recall
+## A quick refresher
 
 Last time we studied how the Python object system works. Some of the things we've learned in that part are crucial for our current disscussion, so let's recall them briefly.
 
@@ -154,15 +154,21 @@ PyTypeObject PyFloat_Type = {
 };
 ```
 
-To dynamically allocate a new type, we call a metatype. A metatype is a type whose instances are types. It determines how types behave. In particular, it creates new type instances. Python has one built-in metatype known as `type`. It's the metatype of all built-in types. It's also used as the default metatype to create classes. When CPython executes the `class` statement, it typically calls `type()` to create the class. We can create a class by calling `type()` directly:
+To dynamically allocate a new type, we call a metatype. A metatype is a type whose instances are types. It determines how types behave. In particular, it creates new type instances. Python has one built-in metatype known as `type`. It's the metatype of all built-in types. It's also used as the default metatype to create classes. When CPython executes the `class` statement, it typically calls `type()` to create the class. We can create a class by calling `type()` directly as well:
 
 ```python
 MyClass = type(name, bases, namespace)
 ```
 
-Slots of a statically defined type are specified explicitly. Slots of a class are set automatically by the metatype. Some slots are mapped to special methods. Last time we studied how a slot is set when the corresponding special method is defined. Both statically and dynamically defined types can inherit some slots from its bases.
+The `tp_new` slot of `type` is called to create a class. The implementation of this slot is the `type_new()` function. This function allocates the type object and sets it up.
 
-Let's turn our attention to attrubutes.
+Slots of a statically defined type are specified explicitly. Slots of a class are set automatically by the metatype. Both statically and dynamically defined types can inherit some slots from its bases.
+
+Some slots are mapped to special methods. If a class defines a special method that corresponds to some slot, CPython automatically sets the slot to the default implementation that calls the special method. This is why we can add objects whose class defines `__add__()`. CPython does the reverse for a statically defined type. If such a type implements a slot that corresponds to some special method, CPython sets the special method to the implementation that wraps the slot. This is how the `int` type gets its `__add__()` special method.
+
+All types must be initialized by calling the `PyType_Ready()` function. This function does a lot of things. For example, it does slot inheritance and adds special method based on slots. For a class, `PyType_Ready()` is called by `type_new()`. For a statically defined type, `PyType_Ready()` must be called explicitly. When CPython starts, it calls `PyType_Ready()` for each built-in type.
+
+With this in mind, let's turn our attention to attributes.
 
 ## Attributes and the VM
 
@@ -174,7 +180,7 @@ We know for sure that in Python we can do three things with attributes:
 * set an attribute to some value: `obj.attr = value`
 * delete an attribute: `del obj.attr`
 
-What these operations do depends, like any other aspect of the object's behavior, on the object's type. A type has certain slots responsible for getting, setting and deleting attributes. The VM calls these slots to execute the statements we listed above. To see what these slots are and how the VM calls them, let's apply the familiar method:
+What these operations do depends, like any other aspect of the object's behavior, on the object's type. A type has certain slots responsible for getting, setting and deleting attributes. The VM calls these slots to execute the statements like `value = obj.attr` and `obj.attr = value`. To see how the VM does that and what these slots are, let's apply the familiar method:
 
 1. Write a piece of code that gets/sets/deletes an attribute.
 2. Disassemble it to bytecode using the [`dis`](https://docs.python.org/3/library/dis.html) module.
@@ -206,7 +212,7 @@ case TARGET(LOAD_ATTR): {
 }
 ```
 
-We can see that the VM calls the `PyObject_GetAttr()` function to do the job. Here's what it does:
+We can see that the VM calls the `PyObject_GetAttr()` function to do the job. Here's what this function does:
 
 ```C
 PyObject *
@@ -235,9 +241,9 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
 }
 ```
 
-This function first tries to call the `tp_getattro` slot of the object's type. If this slot is not defined, it tries to call the `tp_getattr` slot. If `tp_getattr` is not defined either, it raises `AttributeError`.
+It first tries to call the `tp_getattro` slot of the object's type. If this slot is not defined, it tries to call the `tp_getattr` slot. If `tp_getattr` is not defined either, it raises `AttributeError`.
 
-A type defines `tp_getattro` or `tp_getattr` or both to support attribute access. [According to the documentation](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_getattr), the only difference between them is that `tp_getattro` takes a Python string as the name of an attribute and `tp_getattr` takes a C string. Though the choice exists, you won't find types in CPython that implement `tp_getattr`. This slot has been deprecated in favor of `tp_getattro`.
+A type defines `tp_getattro` or `tp_getattr` or both to support attribute access. [According to the documentation](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_getattr), the only difference between them is that `tp_getattro` takes a Python string as the name of an attribute and `tp_getattr` takes a C string. Though the choice exists, you won't find types in CPython that implement `tp_getattr`, because it has been deprecated in favor of `tp_getattro`.
 
 ### Setting an attribute
 
@@ -251,7 +257,7 @@ $ echo 'obj.attr = value' | python -m dis
 ...
 ```
 
-The VM executes `STORE_ATTR` as follows:
+And the VM executes `STORE_ATTR` as follows:
 
 ```C
 case TARGET(STORE_ATTR): {
@@ -328,7 +334,7 @@ Note that `PyObject_SetAttr()` checks whether a type defines `tp_getattro` or `t
 
 ### Deleting an attribute
 
-Interestingly, a type has no special slot for deleting an attribute. What then specifies how to delete an attribute? Let's see. The compiler produces the `DELETE_ATTR` opcode to delete the attribute:
+Interestingly, a type has no special slot for deleting an attribute. What then specifies how to delete an attribute? Let's see. The compiler produces the `DELETE_ATTR` opcode to delete an attribute:
 
 ```text
 $ echo 'del obj.attr' | python -m dis
@@ -351,9 +357,9 @@ case TARGET(DELETE_ATTR): {
 }
 ```
 
-To delete an attribute, the VM calls the same `PyObject_SetAttr()` function that it calls to set an attribute. The `NULL` value indicates that the attribute should be deleted.
+To delete an attribute, the VM calls the same `PyObject_SetAttr()` function that it calls to set an attribute, so the same `tp_setattro` slot is responsible for deleting attributes. But how does it know which of two operations to perform? The `NULL` value indicates that the attribute should be deleted.
 
-In this section we've learned that the `tp_getattro` and `tp_setattro` slots determine how attributes of an object work. The next question that comes to mind is: How are these slots implemented?
+As this section shows, the `tp_getattro` and `tp_setattro` slots determine how attributes of an object work. The next question that comes to mind is: How are these slots implemented?
 
 ## Slots implementations
 
@@ -361,9 +367,7 @@ Any function of the appropriate signature can be an implementation of  `tp_getat
 
 The generic functions for getting and setting attributes are  `PyObject_GenericGetAttr()` and `PyObject_GenericSetAttr()`. All classes use them by default. Most built-in types specify them as slots implementations exlicitly or inherit them from `object` that also uses the generic implementation.
 
-In this post, we'll focus on the generic implementation, since it's basically what we mean when we think about Python attributes. And while we'll be talking about a single concrete implementation, keep in mind that theoretically `tp_getattro` and `tp_setattro` can be anything.
-
-We'll also discuss two important cases when the generic implementation is not used. The first case is any class that customizes attribute access and assignment by implementing the `__getattribute__()`,  `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. CPython sets the `tp_getattro` and `tp_setattro` slots of such a class to the functions that call those methods. The second case is `type`. It implements the `tp_getattro` and `tp_setattro` slots in its own way, though its implementation is quite similiar to the generic one. Attributes of types and attributes of ordinary objects work differently but not by much.
+In this post, we'll focus on the generic implementation, since it's basically what we mean by Python attributes. We'll also discuss two important cases when the generic implementation is not used. The first case `type`. It implements the `tp_getattro` and `tp_setattro` slots in its own way, though its implementation is quite similiar to the generic one. The second case is any class that customizes attribute access and assignment by defining the `__getattribute__()`,  `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. CPython sets the `tp_getattro` and `tp_setattro` slots of such a class to the functions that call those methods.
 
 ## Generic attribute management
 
@@ -397,7 +401,7 @@ If the object's dictionary doesn't contain the attribute, CPython loads the valu
 'class attribute'
 ```
 
-If the type's dictionary doesn't contain the attribute either, CPython searches for the value in the dictionaries of the parent types:
+If the type's dictionary doesn't contain the attribute either, CPython searches for the value in the dictionaries of the type's parents:
 
 ```pycon
 >>> class B(A): # note the inheritance
@@ -408,22 +412,24 @@ If the type's dictionary doesn't contain the attribute either, CPython searches 
 'class attribute'
 ```
 
-As we can see, an attribute of an object is one of two things: 
+So, an attribute of an object is one of two things: 
 
 * an instance variable; or
 * a type variable.
 
-Instance variables are stored in the object's dictionary, and type variables are stored in the type's dictionary and in the dictionaries of the parent types. To set an attribute to some value, CPython simply updates the object's dictionary. To get the value of an attribute, CPython searches for it first in the object's dictionary and then in the type's dictionary and in the dictionaries of the parent types. The order in which CPython iterates over the types when it searches for the value is [the Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO).
+Instance variables are stored in the object's dictionary, and type variables are stored in the type's dictionary and in the dictionaries of the type's parents. To set an attribute to some value, CPython simply updates the object's dictionary. To get the value of an attribute, CPython searches for it first in the object's dictionary and then in the type's dictionary and in the dictionaries of the type's parents. The order in which CPython iterates over the types when it searches for the value is [the Method Resolution Order](https://www.python.org/download/releases/2.3/mro/) (MRO).
+
+Python attributes would be as simple as that if there were no descriptors. 
 
 ### Descriptors
 
-Python attributes would be as simple as that if there were no descriptors. Techically, a descriptor is a Python object whose type implements certain slots: `tp_descr_get` or `tp_descr_set` or both. Essentially, a descriptor is a Python object that, when used as an attribute, controls what happens we get, set or delete it. If `PyObject_GenericGetAttr()` finds that the value is a descriptor whose type implements the `tp_descr_get` slot, it doesn't just return the value as it normally does but calls `tp_descr_get` and returns the result of this call. The `tp_descr_get` slot recieves three parameters: the descriptor itself, the object whose attribute is being looked up and the object's type. It's up to `tp_descr_get` to decide what to do with the parameters and what to return. Similarly, `PyObject_GenericSetAttr()` looks up the current attribute value. If it finds that the value is a descriptor whose type implements `tp_descr_set`, it calls `tp_descr_set` instead of just updating the object's dictionary. The arguments passed to `tp_descr_set` are the descriptor, the object, and the new value to be assigned. When we delete an attribute, `PyObject_GenericSetAttr()` calls `tp_descr_set` with the new value set to `NULL`.
+Techically, a descriptor is a Python object whose type implements certain slots: `tp_descr_get` or `tp_descr_set` or both. Essentially, a descriptor is a Python object that, when used as an attribute, controls what happens we get, set or delete it. If `PyObject_GenericGetAttr()` finds that the attribute value is a descriptor whose type implements  `tp_descr_get`, it doesn't just return the value as it normally does but calls `tp_descr_get` and returns the result of this call. The `tp_descr_get` slot takes three parameters: the descriptor itself, the object whose attribute is being looked up and the object's type. It's up to `tp_descr_get` to decide what to do with the parameters and what to return. Similarly, `PyObject_GenericSetAttr()` looks up the current attribute value. If it finds that the value is a descriptor whose type implements `tp_descr_set`, it calls `tp_descr_set` instead of just updating the object's dictionary. The arguments passed to `tp_descr_set` are the descriptor, the object, and the new attribute value. To delete an attribute, `PyObject_GenericSetAttr()` calls `tp_descr_set` with the new attribute value set to `NULL`.
 
 On one side, descriptors make Python attributes a bit complex. On the other side, descriptors make Python attributes powerful. As Python's glossary [says](https://docs.python.org/3/glossary.html#term-descriptor),
 
 > Understanding descriptors is a key to a deep understanding of Python because they are the basis for many features including functions, methods, properties, class methods, static methods, and reference to super classes.
 
-Indeed, we use descriptors all the time. Let's revise one important use case of descriptors that we discussed in the previous part: methods.
+Let's revise one important use case of descriptors that we discussed in the previous part: methods.
 
 A function put in the type's dictionary works not like an ordinary function but like a method. That is, we don't need to explicitly pass the first argument when we call it:
 
@@ -447,7 +453,7 @@ However, if we look up the value of `'f'` in the type's dictionary, we'll get th
 <function <lambda> at 0x108a4ca60> 
 ```
 
-CPython returns not the value stored in the dictionary but something else. This is because functions are descriptors. The `function` type implements the `tp_descr_get` slot, so `PyObject_GenericGetAttr()` calls this slot and returns the result. The result of the call is a method object that stores both the function and the instance. When we call a method object, the instance is prepended to the list of arguments and the function gets called.
+CPython returns not the value stored in the dictionary but something else. This is because functions are descriptors. The `function` type implements the `tp_descr_get` slot, so `PyObject_GenericGetAttr()` calls this slot and returns the result of the call. The result of the call is a method object that stores both the function and the instance. When we call a method object, the instance is prepended to the list of arguments and the function gets invoked.
 
 Descriptors have their special behavior only when they are used as type variables. When they are used as instance variables, they behave like ordinary objects. For example, a function put in the object's dictionary does not become a method:
 
@@ -477,11 +483,11 @@ If a class defines `__get__()`, CPython sets its `tp_descr_get` slot to the func
 
 If you wonder why anyone would want to define their our descriptors in the first place, check out the excellent [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#id1) by Raymond Hettinger.
 
-Now, when we know what descriptors are, we're ready to study the algorithms for getting and setting attributes. However, since we're going to look at the actual code, we first need to understand where attributes are stored. That is, we need to understand what the object's and type's dictionaries really are.
+Our goal is to study the actual algorithms for getting and setting attributes. Descriptors is one prerequisite for that. Another is the understanding of what the object's dictionary and the type's dictionary really are.
 
-### Object's and type's dictionaries
+### Object's dictinary and type's dictionary
 
-An object's dictionary is a dictionary in which instance variables are stored. A pointer to the object's dictionary is a member of the object. For example, a function object has the `func_dict` member that points to the function's dictionary:
+An object's dictionary is a dictionary in which instance variables are stored. Every object keeps a pointer to its dictionary. For example, a function object has the `func_dict` member for that purpose:
 
 ```C
 typedef struct {
@@ -491,7 +497,7 @@ typedef struct {
 } PyFunctionObject;
 ```
 
-To tell CPython which member of an object is the pointer to the object's dictionary, the object's type specifies an offset of this member using the `tp_dictoffset` slot. Here's how the `function` type does this:
+To tell CPython which member of an object is the pointer to the object's dictionary, the object's type specifies the offset of this member using the `tp_dictoffset` slot. Here's how the `function` type does this:
 
 ```C
 PyTypeObject PyFunction_Type = {
@@ -501,7 +507,7 @@ PyTypeObject PyFunction_Type = {
 };
 ```
 
-A positive value of `tp_dictoffset` specifies an offset from the start of the struct. A negative value specifies an offset from the end of the struct. The zero offset means that the object doesn't have the dictionary. For example, integers don't have dictionaries:
+A positive value of `tp_dictoffset` specifies an offset from the start of the object's struct. A negative value specifies an offset from the end of the struct. The zero offset means that the object doesn't have the dictionary. For example, integers don't have dictionaries:
 
 ```pycon
 >>> (12).__dict__
@@ -510,7 +516,7 @@ Traceback (most recent call last):
 AttributeError: 'int' object has no attribute '__dict__'
 ```
 
-We can assure ourselves that `tp_dictoffset` of the `int` type is set to `0`:
+We can assure ourselves that `tp_dictoffset` of the `int` type is set to `0` by checking the `__dictoffset__` attribute:
 
 ```pycon
 >>> int.__dictoffset__
@@ -614,13 +620,13 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
 }
 ```
 
-Despite its length, it implements a simple algorithm:
+Despite its length, the function implements a simple algorithm:
 
-1. Search for the attribute value among type variables. The order of search is the MRO.
+1. Search for the attribute value among type variables. The order of the search is the MRO.
 2. If the value is a descriptor whose type implements the `tp_descr_set` slot, call the slot.
 3. Otherwise, update the object's dictionary with the new value.
 
-We haven't discussed the descriptors that implement the `tp_descr_set` slot, so you may wonder why we need them at all. Consider Python's `property()`. The following example from the docs demostrates its canonical usage to create a managed attribute:
+We haven't discussed the descriptor types that implement the `tp_descr_set` slot, so you may wonder why we need them at all. Consider Python's [`property()`](https://docs.python.org/3/library/functions.html#property). The following example from the docs demostrates its canonical usage to create a managed attribute:
 
 ```python
 class C:
@@ -641,7 +647,9 @@ class C:
 
 > If c is an instance of C, `c.x` will invoke the getter, `c.x = value` will invoke the setter and `del c.x` the deleter.
 
-How does `property()` work? The answer is simple. It's a descriptor type. It implements both the `tp_descr_get` and `tp_descr_set` slots that call the specified functions. Though the example from the docs doesn't show this, we can use a custom setter to do something useful. For example, we can use it to perform some validation of the new value.
+How does `property()` work? The answer is simple: it's a descriptor type. It implements both the `tp_descr_get` and `tp_descr_set` slots that call the specified functions.
+
+The example from the docs is only a framework and doesn't do much. However, it can easily be extended to do something useful. For example, we can write a setter that performs some validation of the new attribute value.
 
 ### PyObject_GenericGetAttr()
 
@@ -774,19 +782,19 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
 
 The major steps of this algorithm are:
 
-1. Search for the attribute value among type variables. The order of search is the MRO.
-2. If the value is a data descriptor whose type implements the `tp_descr_get` slot, call this slot and return the result. Otherwise, remember the value and continue. A data descriptor is a descriptor whose type implements the `tp_descr_set` slot.
+1. Search for the attribute value among type variables. The order of the search is the MRO.
+2. If the value is a data descriptor whose type implements the `tp_descr_get` slot, call this slot and return the result of the call. Otherwise, remember the value and continue. A data descriptor is a descriptor whose type implements the `tp_descr_set` slot.
 3. Locate the object's dictionary using `tp_dictoffset`. If the dictionary contains the value, return it.
-4. If the value from step 2 is a descriptor whose type implements the `tp_descr_get` slot, call this slot and return the result.
+4. If the value from step 2 is a descriptor whose type implements the `tp_descr_get` slot, call this slot and return the result of the call.
 5. Return the value from step 2. The value can be `NULL`.
 
 Since an attribute can be both an instance variable and a type variable, CPython must decide which one takes precedence over the other. What the algorithm does is essentially implement a certain order of precedence. This order is:
 
 1. type data descriptors
 2. instance variables
-3. type non-data descriptors and other type variables
+3. type non-data descriptors and other type variables.
 
-The natural question to ask is: Why does it implement this particular order? More specifically, **why do data descriptors take precedence over instance variables but non-data descriptros don't? **First of all, note that some descriptors must take precedence over instance variables in order for Python to work as expected. An example of such a descriptor is the `__dict__` attribute of an object. You won't find the `'__dict__'` key in the object's dictionary because `__dict__` is a data descriptor stored in the type's dictionary:
+The natural question to ask is: Why does it implement this particular order? More specifically, **why do data descriptors take precedence over instance variables but non-data descriptros don't? **First of all, note that some descriptors must take precedence over instance variables in order for attributes to work as expected. An example of such a descriptor is the `__dict__` attribute of an object. You won't find it in the object's dictionary, because it's a data descriptor stored in the type's dictionary:
 
 ```pycon
 >>> a.__dict__
@@ -820,7 +828,7 @@ Non-data descriptors don't take precedence over instance variables, so that most
 
 We've learned how attributes of an ordinary object work. Let's see now how attributes of a type work.
 
-## Type attributes
+## Metatype attribute managment
 
 Basically, attributes of a type work just like attributes of an ordinary object. When we set an attribute of a type to some value, CPython puts the value in the type's dictionary:
 
@@ -846,7 +854,9 @@ If the type's dictionary doesn't contain the attribute, CPython loads the value 
 True
 ```
 
-Finally, if the metatype's dictionary doesn't contain the attribute either, CPython searches for the value in the dictionaries of metatype's parents... The analogy with the generic implementation is clear. We just change the words "object" with "type" and "type" with "metatype". However, we said before that `type` implements the `tp_getattro` and `tp_setattro` slots in its own way. Why? Let's take a look at the code.
+Finally, if the metatype's dictionary doesn't contain the attribute either, CPython searches for the value in the dictionaries of the metatype's parents...
+
+The analogy with the generic implementation is clear. We just change the words "object" with "type" and "type" with "metatype". However, `type` implements the `tp_getattro` and `tp_setattro` slots in its own way. Why? Let's take a look at the code.
 
 ### type_setattro()
 
@@ -899,7 +909,7 @@ type_setattro(PyTypeObject *type, PyObject *name, PyObject *value)
 }
 ```
 
-We can see that this function calls generic `_PyObject_GenericSetAttrWithDict()`, but it does something else too. First, it ensures that the type is not a statically defined type because such types are designed to be immutable:
+This function calls generic `_PyObject_GenericSetAttrWithDict()` to set the attribute value, but it does something else too. First, it ensures that the type is not a statically defined type, because such types are designed to be immutable:
 
 ```pycon
 >>> int.x = 2
@@ -908,11 +918,11 @@ Traceback (most recent call last):
 TypeError: can't set attributes of built-in/extension type 'int'
 ```
 
-It also checks whether the attribute is a special method. If the attribute is a special method, it updates the slots corresponding to that special method. For example, if we define the `__add__()` special method on an existing class, CPython will set the `nb_add` slot of the class to the default implementation that calls the method. Due to this mechanism, special methods and slots of a class are kept in sync.
+It also checks whether the attribute is a special method. If the attribute is a special method, it updates the slots corresponding to that special method. For example, if we define the `__add__()` special method on an existing class, it will set the `nb_add` slot of the class to the default implementation that calls the method. Due to this mechanism, special methods and slots of a class are kept in sync.
 
 ### type_getattro()
 
-The `type_getattro()` function, an implemenation of the `tp_getattro` slot, resembles the generic function:
+The `type_getattro()` function, an implemenation of the `tp_getattro` slot, doesn't call the generic function but resembles it:
 
 ```C
 /* This is similar to PyObject_GenericGetAttr(),
@@ -1005,10 +1015,10 @@ type_getattro(PyTypeObject *type, PyObject *name)
 }
 ```
 
-This algorithm indeed repeats the logic of the generic implementation, but with three important differences:
+This algorithm indeed repeats the logic of the generic implementation but with three important differences:
 
 * It gets the type's dictionary via `tp_dict`. The generic implementation would try to locate it using metatype's `tp_dictoffset`.
-* It searches for the type variable not only in type's dictionary but also in the dictionaries of type's parents. The generic implementation would handle a type like an ordinary object that has no notions of inheritance.
+* It searches for the type variable not only in the type's dictionary but also in the dictionaries of the type's parents. The generic implementation would handle a type like an ordinary object that has no notions of inheritance.
 * It supports type descriptors. The generic implementation would support only metatype descriptors.
 
 As a result, we have the following order of precedence:
@@ -1017,11 +1027,11 @@ As a result, we have the following order of precedence:
 2. type descriptors and other type variables
 3. metatype non-data descriptors and other metatype variables.
 
-That's how `type` implements the `tp_getattro` and `tp_setattro` slots. Attributes of most types work according to this implementation, since `type` is the metatype of all built-in types and the metatype of all classes by default. Classes themselves, as we've already said, use the generic implementation by default. If we want to change the behavior of attribues of a class instance or the behavior of attributes of a class, we need to define a new class or a new metaclass that uses a custom implementation. Python provides an easy way to do this.
+That's how `type` implements the `tp_getattro` and `tp_setattro` slots. Since `type` is the metatype of all built-in types and the metatype of all classes by default, attributes of most types work according to this implementation. Classes themselves, as we've already said, use the generic implementation by default. If we want to change the behavior of attribues of a class instance or the behavior of attributes of a class, we need to define a new class or a new metaclass that uses a custom implementation. Python provides an easy way to do this.
 
 ## Custom attribute management
 
-The `tp_getattro` and `tp_setattro` slots of a class are initially set by the `type_new()` function that creates new classes. The generic implementationd is its default choice. A class can customize attribute access, assignment and deletion by defining the `__getattribute__()`, `__getattr__()`, `__setattr__()` and `__delattr__()` special methods. When a class defines `__setattr__()` or `__delattr__()`, its `tp_setattro` slot is set to the `slot_tp_setattro()` function. When a class defines  `__getattribute__()` or `__getattr__()`, its `tp_getattro` slot is set to the `slot_tp_getattr_hook()` function.
+The `tp_getattro` and `tp_setattro` slots of a class are initially set by the `type_new()` function that creates new classes. The generic implementationd is its default choice. A class can customize attribute access, assignment and deletion by defining the [`__getattribute__()`](https://docs.python.org/3/reference/datamodel.html#object.__getattribute__), [`__getattr__()`](https://docs.python.org/3/reference/datamodel.html#object.__getattr__), [`__setattr__()`](https://docs.python.org/3/reference/datamodel.html#object.__setattr__) and [`__delattr__()`](https://docs.python.org/3/reference/datamodel.html#object.__delattr__) special methods. When a class defines `__setattr__()` or `__delattr__()`, its `tp_setattro` slot is set to the `slot_tp_setattro()` function. When a class defines  `__getattribute__()` or `__getattr__()`, its `tp_getattro` slot is set to the `slot_tp_getattr_hook()` function.
 
 The `__setattr__()` and `__delattr__()` special methods are quite straightforward. Basically, they allow us to implement the `tp_setattro` slot in Python. The `slot_tp_setattro()` function simply calls `__delattr__(instance, attr_name)` or `__setattr__(instance, attr_name, value)` depending on whether the `value` is `NULL` or not:
 
@@ -1050,7 +1060,7 @@ slot_tp_setattro(PyObject *self, PyObject *name, PyObject *value)
 }
 ```
 
-The `__getattribute__()` and `__getattr__()` special methods provide a way to customize attribute access. Both take an instance and an attribute name as their parameters and have to return the attribute value. The difference between them is when they get invoked.
+The `__getattribute__()` and `__getattr__()` special methods provide a way to customize attribute access. Both take an instance and an attribute name as their parameters and return the attribute value. The difference between them is when they get invoked.
 
 The `__getattribute__()` special method is the analog of  `__setattr__()` and `__delattr__()` for getting the value of an attribute. It's invoked instead of the generic function. The `__getattr__()` special method is used in tandem with `__getattribute__()` or the generic function. It's invoked when  `__getattribute__()` or the generic function raise `AttributeError`. This logic is implemented in the `slot_tp_getattr_hook()` function:
 
@@ -1097,7 +1107,7 @@ Let's translate the code to English:
 3. If the call from the previous step raised `AttributeError`, call `___getattr__()`.
 4. Return the result of the last call.
 
-The `slot_tp_getattro()` function is an implementation of the `tp_getattro` slot that CPython uses when a class defines `__getattribute__()`  but not `__getattr__()`. It just calls `__getattribute__()`:
+The `slot_tp_getattro()` function is an implementation of the `tp_getattro` slot that CPython uses when a class defines `__getattribute__()`  but not `__getattr__()`. This function just calls `__getattribute__()`:
 
 ```C
 static PyObject *
@@ -1110,7 +1120,7 @@ slot_tp_getattro(PyObject *self, PyObject *name)
 
 Why doesn't CPython set the `tp_getattro` slot to the `slot_tp_getattro()` function instead of  `slot_tp_getattr_hook()` initially? The reason is the design of the mechanism that maps special methods to slots. It requires special methods that map to the same slot to provide the same implementation for that slot. And the `__getattribute__()` and `__getattr__()` special methods map to the same `tp_getattro` slot.
 
-Even a perfect understanding of how the  `__getattribute__()` and `__getattr__()` special methods work doesn't tell us why we need both. Theoretically, we can make attribute access work in any way we want by defining `__getattribute__()`. Sometimes, though, it's more convinient to define `__getattr__()`. For example, the standard [`imaplib`](https://docs.python.org/3/library/imaplib.html#module-imaplib) module provides the `IMAP4` class that can be used to talk to a IMAP4 server. To issue IMAP4 commands, we call the class methods. Both lowercase and uppercase variants of the commands work:
+Even a perfect understanding of how the  `__getattribute__()` and `__getattr__()` special methods work doesn't tell us why we need both of them. Theoretically, `__getattribute__()` should be enough to make attribute access work in any way we want. Sometimes, though, it's more convenient to define `__getattr__()`. For example, the standard [`imaplib`](https://docs.python.org/3/library/imaplib.html#module-imaplib) module provides the `IMAP4` class that can be used to talk to a IMAP4 server. To issue the commands, we call the class methods. Both lowercase and uppercase versions of the commands work:
 
 ```pycon
 >>> from imaplib import IMAP4_SSL # subclass of IMAP4
@@ -1121,16 +1131,18 @@ Even a perfect understanding of how the  `__getattribute__()` and `__getattr__()
 ('OK', [b'Nothing Accomplished. p11mb154389070lti'])
 ```
 
-This is because `IMAP4` defines `__getattr__()`:
+To support this feature, `IMAP4` defines `__getattr__()`:
 
 ```python
 class IMAP4:
     # ...
+    
     def __getattr__(self, attr):
         #       Allow UPPERCASE variants of IMAP4 command methods.
         if attr in Commands:
             return getattr(self, attr.lower())
         raise AttributeError("Unknown IMAP4 command: '%s'" % attr)
+    
     # ...
 ```
 
@@ -1154,7 +1166,7 @@ But is it really necessary to create a method object if all we need to do is to 
 When the compiler sees the method call with positional arguments like `obj.method(arg1,...,argN)`, it does not produce the `LOAD_ATTR` opcode to load the method and the `CALL_FUNCTION` opcode to call the method. Instead, it produces a pair of the `LOAD_METHOD` and `CALL_METHOD` opcodes:
 
 ```text
-$ echo 'obj.method()' | python3 -m dis
+$ echo 'obj.method()' | python -m dis
   1           0 LOAD_NAME                0 (obj)
               2 LOAD_METHOD              1 (method)
               4 CALL_METHOD              0
@@ -1176,7 +1188,7 @@ To learn more about this optimization, check out [the issue](https://bugs.python
 
 ## Listing attributes of an object
 
-We can see what attributes an object has by calling the built-in [`dir()`](https://docs.python.org/3/library/functions.html#dir) function on the object. Have you ever wondered how this function finds the attributes? It's implemented by calling the `__dir__()` special method of the object's type. Types rarely define their own `__dir__()`, yet all the types have it. This is because the `object` type defines `__dir__()`, and all other types inherit from `object`.  The implementation provided by `object` lists all the attributes stored in the object's dictionary, in the type's dictionary and in the dictionaries of type's parents. So, `dir()` effectively returns all the attributes of an ordinary object. However, when we call `dir()` on a type, we don't get all its attributes. This is because `type` provides its own implementation of `__dir__()`. This implementation returns attributes stored in the type's dictionary and in the dictionaries of type's parents. It, however, ignores attributes stored in the metatype's dictionary and in the dictionaries of metatype's parents. The documentation [explains](https://docs.python.org/3/library/functions.html#dir) why this is the case:
+Python provides the built-in [`dir()`](https://docs.python.org/3/library/functions.html#dir) function that can be used to view what attributes an object has. Have you ever wondered how this function finds the attributes? It's implemented by calling the `__dir__()` special method of the object's type. Types rarely define their own `__dir__()`, yet all the types have it. This is because the `object` type defines `__dir__()`, and all other types inherit from `object`.  The implementation provided by `object` lists all the attributes stored in the object's dictionary, in the type's dictionary and in the dictionaries of the type's parents. So, `dir()` effectively returns all the attributes of an ordinary object. However, when we call `dir()` on a type, we don't get all its attributes. This is because `type` provides its own implementation of `__dir__()`. This implementation returns attributes stored in the type's dictionary and in the dictionaries of the type's parents. It, however, ignores attributes stored in the metatype's dictionary and in the dictionaries of the metatype's parents. The documentation [explains](https://docs.python.org/3/library/functions.html#dir) why this is the case:
 
 > Because `dir()` is supplied primarily as a convenience for use at an interactive prompt, it tries to supply an interesting set of names more than it tries to supply a rigorously or consistently defined set of names, and its detailed behavior may change across releases. For example, metaclass attributes are not in the result list when the argument is a class.
 
@@ -1191,15 +1203,15 @@ Take any built-in type and list its attributes. You'll get quite a few:
 ['__abs__', '__add__', '__and__', '__bool__', '__ceil__', '__class__', '__delattr__', '__dir__', '__divmod__', '__doc__', '__eq__', '__float__', '__floor__', '__floordiv__', '__format__', '__ge__', '__getattribute__', '__getnewargs__', '__gt__', '__hash__', '__index__', '__init__', '__init_subclass__', '__int__', '__invert__', '__le__', '__lshift__', '__lt__', '__mod__', '__mul__', '__ne__', '__neg__', '__new__', '__or__', '__pos__', '__pow__', '__radd__', '__rand__', '__rdivmod__', '__reduce__', '__reduce_ex__', '__repr__', '__rfloordiv__', '__rlshift__', '__rmod__', '__rmul__', '__ror__', '__round__', '__rpow__', '__rrshift__', '__rshift__', '__rsub__', '__rtruediv__', '__rxor__', '__setattr__', '__sizeof__', '__str__', '__sub__', '__subclasshook__', '__truediv__', '__trunc__', '__xor__', 'as_integer_ratio', 'bit_length', 'conjugate', 'denominator', 'from_bytes', 'imag', 'numerator', 'real', 'to_bytes']
 ```
 
-We saw last time that the special methods that correspond to slots are added automatically by the `PyType_Ready()` function that initializes types. Where do the rest attributes come from? They all must be specified somehow and then be set to something at some point. This is a vague statement. Let's make it clear.
+We saw last time that the special methods that correspond to slots are added automatically by the `PyType_Ready()` function that initializes types. But where do the rest attributes come from? They all must be specified somehow and then be set to something at some point. This is a vague statement. Let's make it clear.
 
-The most straightforward way to specify attributes of a type is to create a new dictionary, populate it with attributes and set type's `tp_dict`  to that dictionary. We cannot do that before we define built-in types, so `tp_dict` of built-in types is initilized to `NULL`. It turns out that `PyType_Ready()` creates dictionaries of built-in types in runtime. It is also responsible for adding all the attributes.
+The most straightforward way to specify attributes of a type is to create a new dictionary, populate it with attributes and set type's `tp_dict`  to that dictionary. We cannot do that before built-in types are defined, so `tp_dict` of built-in types is initilized to `NULL`. It turns out that the `PyType_Ready()` function creates dictionaries of built-in types at runtime. It is also responsible for adding all the attributes.
 
 First, `PyType_Ready()` ensures that a type has a dictionary. Then, it adds attributes to the dictionary. A type tells `PyType_Ready()`  which attributes to add by specifying the [`tp_methods`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_methods), [`tp_members`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_members) and [`tp_getset`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_getset) slots. Each slot is an array of structs that describe different kinds of attributes.
 
 ### tp_methods
 
-The `tp_methods` slot is an array of the `PyMethodDef` structs that describe methods:
+The `tp_methods` slot is an array of the [`PyMethodDef`](https://docs.python.org/3/c-api/structures.html#c.PyMethodDef) structs that describe methods:
 
 ```C
 struct PyMethodDef {
@@ -1233,7 +1245,7 @@ static PyMethodDef object_methods[] = {
 };
 ```
 
-The callable object added to the dictionary is usually a method descriptor. We should probably discuss what a method descriptor is in another post on Python callables, but essentially it is an object that behaves like a function object, i.e. it can be bound to an instance. The major difference is that a function bound to an instance returns a method object, and a method descriptor bound to an instance returns a built-in method object. A method object encapsulates a Python function and an instance, and a built-in method object encapsulates a C function and an instance.
+The callable object added to the dictionary is usually a method descriptor. We should probably discuss what a method descriptor is in another post on Python callables, but essentially it is an object that behaves like a function object, i.e. it binds to instances. The major difference is that a function bound to an instance returns a method object, and a method descriptor bound to an instance returns a built-in method object. A method object encapsulates a Python function and an instance, and a built-in method object encapsulates a C function and an instance.
 
 For example, `object.__dir__` is a method descriptor:
 
@@ -1255,11 +1267,11 @@ If we bind `__dir__ ` to an instance, we get a built-in method object:
 
 If `ml_flags` flags specifies that the method is static, a built-in method object is added to the dictionary instead of a method descriptor straight away.
 
-Every method of any built-in type either wraps some slot or is added to the dictionary by the described mechanism.
+Every method of any built-in type either wraps some slot or is added to the dictionary based on `tp_methods`.
 
 ### tp_members
 
-The `tp_members` slot is an array of the `PyMemberDef` structs. Each struct describes an attribute that exposes a C member of objects of the type:
+The `tp_members` slot is an array of the [`PyMemberDef`](https://docs.python.org/3/c-api/structures.html#c.PyMemberDef) structs. Each struct describes an attribute that exposes a C member of the objects of the type:
 
 ```C
 typedef struct PyMemberDef {
@@ -1295,7 +1307,7 @@ static PyMemberDef type_members[] = {
 
 ### tp_getset
 
-The `tp_getset` slot is an array of the `PyGetSetDef` structs that desribe arbitrary data descriptors like `property()`:
+The `tp_getset` slot is an array of the [`PyGetSetDef`](https://docs.python.org/3/c-api/structures.html#c.PyGetSetDef) structs that desribe arbitrary data descriptors like `property()`:
 
 ```C
 typedef struct PyGetSetDef {
@@ -1328,11 +1340,11 @@ static PyGetSetDef func_getsetlist[] = {
 
 ```
 
-The `__dict__` attribute is implemented not as a read-only member but as a geteset descriptor because it does more than simply return the dictionary located at `tp_dictoffset`. For instance, the descriptor creates the dictionary if it doesn't exist yet.
+The `__dict__` attribute is implemented not as a read-only member descriptor but as a geteset descriptor because it does more than simply return the dictionary located at `tp_dictoffset`. For instance, the descriptor creates the dictionary if it doesn't exist yet.
 
-Classes also get the `__dict__` attribute by this mechanism. The `type_new()` function that creates classes specifies `tp_getset` before it calls `PyType_Ready()`. Some classes, though, don't get this attribute because their instances don't have dictionaries. These are the classes that define the `__slots__` attribute.
+Classes also get the `__dict__` attribute by this mechanism. The `type_new()` function that creates classes specifies `tp_getset` before it calls `PyType_Ready()`. Some classes, though, don't get this attribute because their instances don't have dictionaries. These are the classes that define `__slots__`.
 
-## How \__slots__ works
+## \__slots__
 
 The [`__slots__`](https://docs.python.org/3/reference/datamodel.html#slots) attribute of a class enumerates the attributes that the class can have:
 
@@ -1342,7 +1354,7 @@ The [`__slots__`](https://docs.python.org/3/reference/datamodel.html#slots) attr
 ...
 ```
 
-If a class defines `__slots__`, the `__dict__` attribute is not added to the class's dictionary and its `tp_dictoffset` is set to `0`. The main effect of this is that the class instances don't have dictionaries:
+If a class defines `__slots__`, the `__dict__` attribute is not added to the class's dictionary and `tp_dictoffset` of the class is set to `0`. The main effect of this is that the class instances don't have dictionaries:
 
 ```pycon
 >>> D.__dictoffset__
@@ -1369,13 +1381,32 @@ How is that possible? The attributes listed in `__slots__` become members of cla
 <member 'x' of 'D' objects>
 ```
 
-The  `__slots__` attributes saves memory since instances don't have dictionaries. According to [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#member-objects-and-slots),
+Since instances don't have dictionaries, the  `__slots__` attribute saves memory.  According to [Descriptor HowTo Guide](https://docs.python.org/3/howto/descriptor.html#member-objects-and-slots),
 
 > On a 64-bit Linux build, an instance with two attributes takes 48 bytes with `__slots__` and 152 bytes without.
 
-The giude also gives other benefits of using `__slots__`. I recommend you check them out.
+The giude also lists other benefits of using `__slots__`. I recommend you check them out.
 
 ## Summary
 
-We began our investigation by looking at the `LOAD_ATTR`, `STORE_ATTR` and `DELETE_ATTR` opcodes that the compiler produces to work with attributes. Then we learned that the VM calls the `tp_getattro` and `tp_setattro` slots of the object's type to execute the opcodes and studied the three most important implementations of these slots. That c
+The compiler produces the `LOAD_ATTR`, `STORE_ATTR` and `DELETE_ATTR` opcodes to get, set, and delete attributes. To executes these opcodes, the VM calls the `tp_getattro` and `tp_setattro` slots of the object's type. A type may implement these slots in an arbitrary way, but mostly we have to deal with three implementations:
 
+* the generic implementation used by most built-in types and classes
+* the implementation used by `type`
+* the implementation used by classes that define the `__getattribute__()`, `__getattr__()`, `__setattr__()` and `__delattr__()` special methods.
+
+The generic implementation is straightforward once you understand what descriptors are. In a nutshell, descriptors are attributes that have control over attribute access, assignment and deletion. They allow CPython to implement many features including methods and properties.
+
+Built-in types define attributes using three mechanisms:
+
+* `tp_methods`
+* `tp_members`; and
+* `tp_getset`.
+
+Classes also use these mechanisms to define some attributes. For example, `__dict__` is defined as a getset descriptor, and the attributes listed in `__slots__` are defined as member descriptors.
+
+## P.S.
+
+This post closes the first season of the Python behind the scenes series. We've learned a lot over this time. A lot remains to be covered. The topics on my list include: CPython's memory managment, the GIL, the implementation of built-in types, the import system, concurrency and the internals of the standard modules. You can tell me what you would like to read about next time. Send your ideas and preferences at *victor@tenthousandmeters.com*.
+
+See you in 2021. Stay tuned!
