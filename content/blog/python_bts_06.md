@@ -925,7 +925,7 @@ The result of this call is what we get when we call the special method.
 
 Today we've demystified perhaps the most magical aspect of Python. We've learned that the behavior of a Python object is determined by the slots of the object's type. The slots of a statically defined type can be specified explicitly, and any type can inherit some slots from its ancestors. The real insight was that the slots of a class are set up automatically by CPython based on the defined special methods. CPython does the reverse too. It adds special methods to the type's dictionary if the type implements the corresponding slots.
 
-We've learned a lot. Nevertheless, the Python object system is such a vast subject that at least as much remains to be covered. For example, we haven't really discussed how attributes work. This is what we're going to do next time.
+We've learned a lot. Nevertheless, the Python object system is such a vast subject that at least as much remains to be covered. For example, we haven't really discussed how attributes work. This is what we're going to do [next time]({filename}/blog/python_bts_07.md).
 
 <br>
 
