@@ -52,7 +52,7 @@ Digits are stored in a little-endian order. The first digit (`ob_digit[0]`) is t
 
 Finally, the absolute value of an integer is calculated as follows: 
 
-$$val = ob\_digit[0] \times (2 ^{30})^0 + ob\_digit[1] \times (2 ^{30})^1 + \cdots + ob\_digit[abs(ob\_size) - 1] \times (2 ^{30})^{abs(ob\_size) - 1}$$
+$$val = ob\_digit[0] \times (2 ^{30})^0 + ob\_digit[1] \times (2 ^{30})^1 + \cdots + ob\_digit[|ob\_size| - 1] \times (2 ^{30})^{|ob\_size| - 1}$$
 
 Let's see what all of this means with an example. Suppose we have an integer object that has `ob_digit = [3, 5, 1]` and `ob_size = -3`. To compute its value, we can do the following:
 
@@ -108,9 +108,271 @@ def get_digits(num):
 [952369152, 337507546, 44]
 ```
 
-
+As you might guess, the representation of bignums is an easy part. The main challange is to implement arithmetic operations and to implement them efficiently.
 
 ## Bignum arithmetic
+
+We learned in part 6 that the behavior of a Python object is determined by the object's type. Each member of a type, called slot, is responsible for a particular aspect of the object's behavior. So, to understand how CPython performs arithmetic operations on integers, we need to study the slots of the `int` type that implement those operations.
+
+In the C code, the `int` type is called `PyLong_Type`. It's defined in `Objects/longobject.c` as follows:
+
+```C
+PyTypeObject PyLong_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    "int",                                      /* tp_name */
+    offsetof(PyLongObject, ob_digit),           /* tp_basicsize */
+    sizeof(digit),                              /* tp_itemsize */
+    0,                                          /* tp_dealloc */
+    0,                                          /* tp_vectorcall_offset */
+    0,                                          /* tp_getattr */
+    0,                                          /* tp_setattr */
+    0,                                          /* tp_as_async */
+    long_to_decimal_string,                     /* tp_repr */
+    &long_as_number,                            /* tp_as_number */
+    0,                                          /* tp_as_sequence */
+    0,                                          /* tp_as_mapping */
+    (hashfunc)long_hash,                        /* tp_hash */
+    0,                                          /* tp_call */
+    0,                                          /* tp_str */
+    PyObject_GenericGetAttr,                    /* tp_getattro */
+    0,                                          /* tp_setattro */
+    0,                                          /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE |
+        Py_TPFLAGS_LONG_SUBCLASS,               /* tp_flags */
+    long_doc,                                   /* tp_doc */
+    0,                                          /* tp_traverse */
+    0,                                          /* tp_clear */
+    long_richcompare,                           /* tp_richcompare */
+    0,                                          /* tp_weaklistoffset */
+    0,                                          /* tp_iter */
+    0,                                          /* tp_iternext */
+    long_methods,                               /* tp_methods */
+    0,                                          /* tp_members */
+    long_getset,                                /* tp_getset */
+    0,                                          /* tp_base */
+    0,                                          /* tp_dict */
+    0,                                          /* tp_descr_get */
+    0,                                          /* tp_descr_set */
+    0,                                          /* tp_dictoffset */
+    0,                                          /* tp_init */
+    0,                                          /* tp_alloc */
+    long_new,                                   /* tp_new */
+    PyObject_Del,                               /* tp_free */
+};
+```
+
+We can see the `long_new()` function that creates new integers, the `long_hash()` function that computes hashes and the implementations of some other important slots. In this post, we'll focus on the slots that implement basic arithmetic operations: addition, substraction, multiplication and division. These slots are grouped together in the [`tp_as_number`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_as_number) suite. Here's what it looks like:
+
+```C
+static PyNumberMethods long_as_number = {
+    (binaryfunc)long_add,       /*nb_add*/
+    (binaryfunc)long_sub,       /*nb_subtract*/
+    (binaryfunc)long_mul,       /*nb_multiply*/
+    long_mod,                   /*nb_remainder*/
+    long_divmod,                /*nb_divmod*/
+    long_pow,                   /*nb_power*/
+    (unaryfunc)long_neg,        /*nb_negative*/
+    long_long,                  /*tp_positive*/
+    (unaryfunc)long_abs,        /*tp_absolute*/
+    (inquiry)long_bool,         /*tp_bool*/
+    (unaryfunc)long_invert,     /*nb_invert*/
+    long_lshift,                /*nb_lshift*/
+    long_rshift,                /*nb_rshift*/
+    long_and,                   /*nb_and*/
+    long_xor,                   /*nb_xor*/
+    long_or,                    /*nb_or*/
+    long_long,                  /*nb_int*/
+    0,                          /*nb_reserved*/
+    long_float,                 /*nb_float*/
+    0,                          /* nb_inplace_add */
+    0,                          /* nb_inplace_subtract */
+    0,                          /* nb_inplace_multiply */
+    0,                          /* nb_inplace_remainder */
+    0,                          /* nb_inplace_power */
+    0,                          /* nb_inplace_lshift */
+    0,                          /* nb_inplace_rshift */
+    0,                          /* nb_inplace_and */
+    0,                          /* nb_inplace_xor */
+    0,                          /* nb_inplace_or */
+    long_div,                   /* nb_floor_divide */
+    long_true_divide,           /* nb_true_divide */
+    0,                          /* nb_inplace_floor_divide */
+    0,                          /* nb_inplace_true_divide */
+    long_long,                  /* nb_index */
+};
+```
+
+We'll begin by studying the `long_add()` function that implements integer addition.
+
+### Addition (and substraction)
+
+First note that a function that adds two integers can be expressed via two other functions that deal with absolute values only:
+
+* a function that adds the absolute values of two integers; and
+* a function that substracts the absolute values of two integers.
+
+It's possible because:
+
+$$-|a|+(-|b|) = -(|a|+|b|)$$
+
+$$|a|+(-|b|) = |a|-|b|$$
+
+$$-|a|+|b| = |b|-|a|$$
+
+CPython uses these simple identities to express the `long_add()` function via the `x_add()` function that adds the absolute values of two integers and the `x_sub()` function that substracts the absolute values of two integers:
+
+```C
+static PyObject *
+long_add(PyLongObject *a, PyLongObject *b)
+{
+    PyLongObject *z;
+
+    CHECK_BINOP(a, b);
+
+    if (Py_ABS(Py_SIZE(a)) <= 1 && Py_ABS(Py_SIZE(b)) <= 1) {
+        return PyLong_FromLong(MEDIUM_VALUE(a) + MEDIUM_VALUE(b));
+    }
+    if (Py_SIZE(a) < 0) {
+        if (Py_SIZE(b) < 0) {
+            z = x_add(a, b); // -|a|+(-|b|) = -(|a|+|b|)
+            if (z != NULL) {
+                /* x_add received at least one multiple-digit int,
+                   and thus z must be a multiple-digit int.
+                   That also means z is not an element of
+                   small_ints, so negating it in-place is safe. */
+                assert(Py_REFCNT(z) == 1);
+                Py_SET_SIZE(z, -(Py_SIZE(z)));
+            }
+        }
+        else
+            z = x_sub(b, a); // -|a|+|b| = |b|-|a|
+    }
+    else {
+        if (Py_SIZE(b) < 0)
+            z = x_sub(a, b); // |a|+(-|b|) = |a|-|b|
+        else
+            z = x_add(a, b);
+    }
+    return (PyObject *)z;
+}
+```
+
+So, we need to understand how `x_add()` and `x_sub()` are implemented.
+
+It turns out that the best way to add the absolute values of two bignums is the column method taught in the elementary school. We take the least significant digit of the first bignum, take the least significant digit of the second bignum, add them and write the result to the least significant digit of the output bignum. If the result of the addition doesn't fit into a single digit, we write the result modulo base and remember the carry. Then we take the second least significant digit of the first bignum, the second least significant digit of the second bignum, add them to the carry, write the result modulo base to the second least significant digit of the output bignum and remeber the carry. The process continues until no digits are left and the last carry is written to the output bignum. Here's CPython's implementation of this algorithm:
+
+```C
+// Some typedefs and macros used in the algorithm:
+// typedef uint32_t digit;
+// #define PyLong_SHIFT    30
+// #define PyLong_MASK     ((digit)(PyLong_BASE - 1))
+
+
+/* Add the absolute values of two integers. */
+static PyLongObject *
+x_add(PyLongObject *a, PyLongObject *b)
+{
+    Py_ssize_t size_a = Py_ABS(Py_SIZE(a)), size_b = Py_ABS(Py_SIZE(b));
+    PyLongObject *z;
+    Py_ssize_t i;
+    digit carry = 0;
+
+    /* Ensure a is the larger of the two: */
+    if (size_a < size_b) {
+        { PyLongObject *temp = a; a = b; b = temp; }
+        { Py_ssize_t size_temp = size_a;
+            size_a = size_b;
+            size_b = size_temp; }
+    }
+    z = _PyLong_New(size_a+1);
+    if (z == NULL)
+        return NULL;
+    for (i = 0; i < size_b; ++i) {
+        carry += a->ob_digit[i] + b->ob_digit[i];
+        z->ob_digit[i] = carry & PyLong_MASK;
+        carry >>= PyLong_SHIFT;
+    }
+    for (; i < size_a; ++i) {
+        carry += a->ob_digit[i];
+        z->ob_digit[i] = carry & PyLong_MASK;
+        carry >>= PyLong_SHIFT;
+    }
+    z->ob_digit[i] = carry;
+    return long_normalize(z);
+}
+```
+
+First note that Python integers are immutable and when CPython performs some arithmetic operation, it always returns a new integer as a result. The size of the new integer is initially set to the maximum possible size of the result. Then if, after the operation is performed, some leading digits happen to be zeros, CPython shrinks the size of the integer by calling `long_normalize()`. In the case of addition, CPython creates a new integer that is one digit longer than the biggest of the two input integers. Then if, after the operation is performed, the most significant digit of the result happens to be 0, it decrements the size of the result by one.
+
+Note also that a digit takes lower 30 bits of the 32-bit int. When we add two digits, we get at most 31-bit integer and the carry is stored at the bit 31.
+
+Substraction of the absolute values of two bignums is done in a similar manner except that carrying is replaced with borrowing. We also need to ensure that the first bignum is the larger of the two. If this is not the case, we swap the bignums and change the sign of the result after the substraction is performed. As it is implemented in CPython, the borrowing is easy because according to the C specification, unsigned ints are a subject to a modular arithmetic:
+
+> Otherwise, if the new type is unsigned, the value is converted by repeatedly adding or subtracting one more than the maximum value that can be represented in the new type until the value is in the range of the new type.
+
+This means that when we substract a larger digit from a smaller one, the maximum possible int is added to the result to get a value in the valid range. For example, `1 - 2 = -1 + (2**32 - 1) = 4294967294 `. To get the effect of borrowing, we write the lower 30 bits to the result and check the bit 31 to see if the borrowing happened. Here's how CPython does all of that:
+
+```C
+static PyLongObject *
+x_sub(PyLongObject *a, PyLongObject *b)
+{
+    Py_ssize_t size_a = Py_ABS(Py_SIZE(a)), size_b = Py_ABS(Py_SIZE(b));
+    PyLongObject *z;
+    Py_ssize_t i;
+    int sign = 1;
+    digit borrow = 0;
+
+    /* Ensure a is the larger of the two: */
+    if (size_a < size_b) {
+        sign = -1;
+        { PyLongObject *temp = a; a = b; b = temp; }
+        { Py_ssize_t size_temp = size_a;
+            size_a = size_b;
+            size_b = size_temp; }
+    }
+    else if (size_a == size_b) {
+        /* Find highest digit where a and b differ: */
+        i = size_a;
+        while (--i >= 0 && a->ob_digit[i] == b->ob_digit[i])
+            ;
+        if (i < 0)
+            return (PyLongObject *)PyLong_FromLong(0);
+        if (a->ob_digit[i] < b->ob_digit[i]) {
+            sign = -1;
+            { PyLongObject *temp = a; a = b; b = temp; }
+        }
+        size_a = size_b = i+1;
+    }
+    z = _PyLong_New(size_a);
+    if (z == NULL)
+        return NULL;
+    for (i = 0; i < size_b; ++i) {
+        /* The following assumes unsigned arithmetic
+           works module 2**N for some N>PyLong_SHIFT. */
+        borrow = a->ob_digit[i] - b->ob_digit[i] - borrow;
+        z->ob_digit[i] = borrow & PyLong_MASK;
+        borrow >>= PyLong_SHIFT;
+        borrow &= 1; /* Keep only one sign bit */
+    }
+    for (; i < size_a; ++i) {
+        borrow = a->ob_digit[i] - borrow;
+        z->ob_digit[i] = borrow & PyLong_MASK;
+        borrow >>= PyLong_SHIFT;
+        borrow &= 1; /* Keep only one sign bit */
+    }
+    assert(borrow == 0);
+    if (sign < 0) {
+        Py_SET_SIZE(z, -Py_SIZE(z));
+    }
+    return maybe_small_long(long_normalize(z));
+}
+```
+
+
+
+## CPython's bignums vs other bignum implementations
+
+
 
 ## Memory usage considerations
 
