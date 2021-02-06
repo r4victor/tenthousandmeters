@@ -46,7 +46,7 @@ So, besides a reference count and a type that all Python objects have, an intege
 
 The `ob_digit` member is a pointer to an array of digits. On 64-bit platforms, each digit is a 30-bit integer that takes values between 0 and 2^30-1 and is stored as an unsigned 32-bit int (`digit` is a typedef for `uint32_t`). On 32-bit platforms, each digit is a 15-bit integer that takes values between 0 and 2^15-1 and is stored as an unsigned 16-bit int (`digit` is a typedef for `unsigned short`). To make things concrete, we'll use 30-bit digits throughout this post.
 
-The `ob_size` member is a signed int, whose absolute value tells us the number of digits in the `ob_digit` array. The sign of `ob_size` indicates the sign of the integer. Negative `ob_size` means that the integer is negative.
+The `ob_size` member is a signed int, whose absolute value tells us the number of digits in the `ob_digit` array. The sign of `ob_size` indicates the sign of the integer. Negative `ob_size` means that the integer is negative. If `ob_size` is 0, then the integer is 0.
 
 Digits are stored in a little-endian order. The first digit (`ob_digit[0]`) is the least significant, and the last digit (`ob_digit[abs(ob_size)-1]`) is the most significant.
 
@@ -161,7 +161,7 @@ PyTypeObject PyLong_Type = {
 };
 ```
 
-We can see the `long_new()` function that creates new integers, the `long_hash()` function that computes hashes and the implementations of some other important slots. In this post, we'll focus on the slots that implement basic arithmetic operations: addition, substraction, multiplication and division. These slots are grouped together in the [`tp_as_number`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_as_number) suite. Here's what it looks like:
+We can see the `long_new()` function that creates new integers, the `long_hash()` function that computes hashes and the implementations of some other important slots. In this post, we'll focus on the slots that implement basic arithmetic operations: addition, subtraction, multiplication and division. These slots are grouped together in the [`tp_as_number`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_as_number) suite. Here's what it looks like:
 
 ```C
 static PyNumberMethods long_as_number = {
@@ -204,7 +204,7 @@ static PyNumberMethods long_as_number = {
 
 We'll begin by studying the `long_add()` function that implements integer addition.
 
-### Addition (and substraction)
+### Addition (and subtraction)
 
 First note that a function that adds two integers can be expressed via two other functions that deal with absolute values only:
 
@@ -306,7 +306,7 @@ First note that Python integers are immutable and when CPython performs some ari
 
 Note also that a digit takes lower 30 bits of the 32-bit int. When we add two digits, we get at most 31-bit integer and the carry is stored at the bit 31.
 
-Substraction of the absolute values of two bignums is done in a similar manner except that carrying is replaced with borrowing. We also need to ensure that the first bignum is the larger of the two. If this is not the case, we swap the bignums and change the sign of the result after the substraction is performed. As it is implemented in CPython, the borrowing is easy because according to the C specification, unsigned ints are a subject to a modular arithmetic:
+Subtraction of the absolute values of two bignums is done in a similar manner except that carrying is replaced with borrowing. We also need to ensure that the first bignum is the larger of the two. If this is not the case, we swap the bignums and change the sign of the result after the subtraction is performed. As it is implemented in CPython, the borrowing is easy because according to the C specification, unsigned ints are a subject to a modular arithmetic:
 
 > Otherwise, if the new type is unsigned, the value is converted by repeatedly adding or subtracting one more than the maximum value that can be represented in the new type until the value is in the range of the new type.
 
@@ -367,6 +367,62 @@ x_sub(PyLongObject *a, PyLongObject *b)
     return maybe_small_long(long_normalize(z));
 }
 ```
+
+The `long_sub()` function that implements integer subtraction delegates the work to `x_add()` and `x_sub()`, just like `long_add()` does. Here it is:
+
+```C
+static PyObject *
+long_sub(PyLongObject *a, PyLongObject *b)
+{
+    PyLongObject *z;
+
+    CHECK_BINOP(a, b);
+
+    if (Py_ABS(Py_SIZE(a)) <= 1 && Py_ABS(Py_SIZE(b)) <= 1) {
+        return PyLong_FromLong(MEDIUM_VALUE(a) - MEDIUM_VALUE(b));
+    }
+    if (Py_SIZE(a) < 0) {
+        if (Py_SIZE(b) < 0) {
+            z = x_sub(b, a);
+        }
+        else {
+            z = x_add(a, b);
+            if (z != NULL) {
+                assert(Py_SIZE(z) == 0 || Py_REFCNT(z) == 1);
+                Py_SET_SIZE(z, -(Py_SIZE(z)));
+            }
+        }
+    }
+    else {
+        if (Py_SIZE(b) < 0)
+            z = x_add(a, b);
+        else
+            z = x_sub(a, b);
+    }
+    return (PyObject *)z;
+}
+```
+
+Arithmetic operations on bignums are much slower that the same arithmetic operations on native integers performed by a CPU. In particular, bignum addition is much slower than CPU addition. And it is slower not only because CPU performs multiple arithmetic operations to add two bignums but mainly because bignum addition usually involves multiple memory accesses, and a memory access can be quite expensive, i.e. hundreds times more costly than an arithmetic operation. Fortunately, CPython employs an optimization to add and substract small integers faster. This optimazation is done by the following check:
+
+```C
+static PyObject *
+long_sub(PyLongObject *a, PyLongObject *b)
+{
+    //...
+
+    if (Py_ABS(Py_SIZE(a)) <= 1 && Py_ABS(Py_SIZE(b)) <= 1) {
+      	// MEDIUM_VALUE macro converts integer to a signed int
+        return PyLong_FromLong(MEDIUM_VALUE(a) - MEDIUM_VALUE(b));
+    }
+		
+  	//...
+}
+```
+
+If both integers comprise of at most one digit, CPython doesn't calls `x_add()` or `x_sub()` but simply computes the result with a single operation. If the result also fits into a single digit, no more calculations are required, and bignums are effectively added (or subtracted) as if they were native integers.
+
+### Mutiplication
 
 
 
