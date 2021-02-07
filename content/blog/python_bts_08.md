@@ -21,7 +21,7 @@ We'll also discuss how CPython's implementation compares to others and highlight
 
 Think for a moment how you would represent big integers in your program if you were to implement them yourself. Probably the most obvious way to do that is to store an integer as a sequence of digits, just like we usually write down numbers. For example, the integer `51090942171709440000` could be represented as `['5', '1', '0', '9', '0', '9', '4', '2', '1', '7', '1', '7', '0', '9', '4', '4', '0', '0', '0', '0']`. This is essentially how bignums are represented in practice. The only important difference is that instead of base 10, much larger bases are used. For example, CPython uses base 2^15 or base 2^30 depending on the platform. What's wrong with base 10? If we represent each digit in a sequence with a single byte but use only 10 out of 256 possible values, it would be very memory-inefficient. We could solve this memory-efficiency problem if we use base 256, so that each digit takes a value between 0 and 255. But still much larger bases are used in practice. The reason for that is because larger base means that numbers have less digits, and the less digits numbers have, the faster arithmetic operations are performed. The base cannot be arbitrary large. It's typically limited by the size of the integers that the CPU can work with. We'll see why this is the case when we discuss bignum arithmetic in the next section. Now let's take a look at how CPython represents bignums.
 
-Everything related to the representation of Python integers can be found in `Include/longintrepr.h`. Technically, Python integers are instances of `PyLongObject` defined in `Include/longobject.h`, but `PyLongObject` is a typedef for `struct _longobject` that is defined in `Include/longintrepr.h`:
+Everything related to the representation of Python integers can be found in `Includeg/longintrepr.h`. Technically, Python integers are instances of `PyLongObject` defined in `Include/longobject.h`, but `PyLongObject` is a typedef for `struct _longobject` that is defined in `Include/longintrepr.h`:
 
 ```C
 struct _longobject {
@@ -161,7 +161,7 @@ PyTypeObject PyLong_Type = {
 };
 ```
 
-We can see the `long_new()` function that creates new integers, the `long_hash()` function that computes hashes and the implementations of some other important slots. In this post, we'll focus on the slots that implement basic arithmetic operations: addition, subtraction, multiplication and division. These slots are grouped together in the [`tp_as_number`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_as_number) suite. Here's what it looks like:
+We can see the `long_new()` function that creates new integers, the `long_hash()` function that computes hashes and the implementations of some other important slots. In this post, we'll focus on the slots that implement basic arithmetic operations: addition, subtraction and multiplication. These slots are grouped together in the [`tp_as_number`](https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_as_number) suite. Here's what it looks like:
 
 ```C
 static PyNumberMethods long_as_number = {
@@ -519,9 +519,32 @@ where $z = (x_1+x_2) (y_1+y_2) - x_1x_2 - x_2y_2$.
 
 So, we only need to calculate $x_1y_1$, $x_2y_2$ and $(x_1+x_2) (y_1+y_2)$. If we split each operand in such a way so that its parts have about half as many digits, then we get an algorithm that works for $O(n^{\log _{2}3})$. Success!
 
-
+The bignum division is a bit harder to implement. We won't discuss it here, but it's essentially the familiar [long division](https://en.wikipedia.org/wiki/Long_division) algorithm. Check out `Objects/longobject.c` to see how bignum division and other arithmetic operations are implemented in CPython. The descriptions of the implemented algorithms can be found in [the chapter 14](http://cacr.uwaterloo.ca/hac/about/chap14.pdf) of the Handbook of Applied Cryptography by Alfred Menezes (it's free!).
 
 ## CPython's bignums vs other bignum implementations
+
+How fast is CPython's implementation of bignums compared to other implementations? While it's not the easiest task to come up with a totally representative test, we can get some idea. [The Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html) has a [pidigits benchmark](https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/pidigits.html#pidigits) that measures the performance of bignums in different programming languages. The benchmark asks to implement a specific algorithm for generating digits of pi. You can find the results [here](https://benchmarksgame-team.pages.debian.net/benchmarksgame/performance/pidigits.html). One important thing to know about these results is that the fastest programs use bignums provided by the GMP library and not the bignums provided by the language. If we exclude the programs that use GMP bindings, we get the following results:
+
+| #     | source                                                       | secs     |
+| ----- | ------------------------------------------------------------ | :------- |
+| 1     | [Haskell GHC #5](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-ghc-5.html) * | 0.75     |
+| 2     | [Chapel #2](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-chapel-2.html) * | 0.76     |
+| 3     | [Julia](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-julia-1.html) * | 1.56     |
+| 4     | [Go #8](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-go-8.html) | 2.68     |
+| 5     | [Dart #2](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-dart-2.html) | 3.33     |
+| **6** | [**Python 3 #4**](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-python3-4.html) | **3.85** |
+| 7     | [OCaml #5](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-ocaml-5.html) | 4.36     |
+| 8     | [Lisp SBCL #2](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-sbcl-2.html) | 5.77     |
+| 9     | [Node js #4](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-node-4.html) | 6.15     |
+| 10    | [Java](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-java-1.html) | 7.61     |
+| 11    | [Erlang HiPE #3](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-hipe-3.html) | 7.94     |
+| 12    | [VW Smalltalk #4](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-vw-4.html) | 8.02     |
+| 13    | [Racket](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-racket-1.html) | 11.40    |
+| 14    | [Free Pascal](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-fpascal-1.html) | 14.65    |
+| 15    | [Ruby](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-yarv-1.html) | 17.10    |
+| 16    | [PHP](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-php-1.html) | 5 min    |
+
+Some languages rely on GMP to implement built-in bignums. Those are marked with asterisk.
 
 
 
