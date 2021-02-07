@@ -422,7 +422,102 @@ long_sub(PyLongObject *a, PyLongObject *b)
 
 If both integers comprise of at most one digit, CPython doesn't calls `x_add()` or `x_sub()` but simply computes the result with a single operation. If the result also fits into a single digit, no more calculations are required, and bignums are effectively added (or subtracted) as if they were native integers.
 
-### Mutiplication
+### Multiplication
+
+There is no silver-bullet algorithm for bignum multiplication. Several algorithms are used in practice because some perform better on relatively small bignums, others on large and extremely large bignums. CPython uses two multiplication algorithms:
+
+* the grade-school multiplication algorithm used by default; and
+* [the Karatsuba multiplication algorithm](https://en.wikipedia.org/wiki/Karatsuba_algorithm) used when both integers have more than 70 digits.
+
+Wkipedia [summarizes](https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication) the grade-school multiplication algorithm as follows:
+
+> Multiply the multiplicand by each digit of the multiplier and then add up all the properly shifted results.
+
+The bignum implementation has one important difference. Instead of storing the results of mutiplying by each digit and then adding them up in the end, we add these results to the output bignum as soon as we compute them. The following gif illustrates the idea:
+
+<br>
+
+<img src="{static}/blog/python_bts_08/mult.gif" alt="diagram1" style="width: 320px; display: block; margin: 0 auto;" />
+
+<br>
+
+This optimization saves both memory and time. The best way to understand other details of the algorithm is to look at the actual implementation. Here's CPython's one:
+
+```C
+// Some typedefs and macros used in the algorithm:
+// typedef uint32_t digit;
+// typedef uint64_t twodigits;
+// #define PyLong_SHIFT    30
+// #define PyLong_MASK     ((digit)(PyLong_BASE - 1))
+
+
+/* Grade school multiplication, ignoring the signs.
+ * Returns the absolute value of the product, or NULL if error.
+ */
+static PyLongObject *
+x_mul(PyLongObject *a, PyLongObject *b)
+{
+    PyLongObject *z;
+    Py_ssize_t size_a = Py_ABS(Py_SIZE(a));
+    Py_ssize_t size_b = Py_ABS(Py_SIZE(b));
+    Py_ssize_t i;
+
+  	// The size of the result is at most size_a + size_b
+    z = _PyLong_New(size_a + size_b);
+    if (z == NULL)
+        return NULL;
+
+    memset(z->ob_digit, 0, Py_SIZE(z) * sizeof(digit));
+    if (a == b) {
+      	// ... special path for computing a square
+    }
+    else { /* a is not the same as b -- gradeschool int mult */
+      
+      	// Iterate over the digits of the multiplier
+        for (i = 0; i < size_a; ++i) {
+            twodigits carry = 0;
+            twodigits f = a->ob_digit[i];
+            digit *pz = z->ob_digit + i;
+            digit *pb = b->ob_digit;
+            digit *pbend = b->ob_digit + size_b;
+
+            // ... signal handling
+
+          	// Iterate over the digits of the multiplicand
+            while (pb < pbend) {
+                carry += *pz + *pb++ * f;
+                *pz++ = (digit)(carry & PyLong_MASK);
+                carry >>= PyLong_SHIFT;
+                assert(carry <= PyLong_MASK);
+            }
+            if (carry)
+                *pz += (digit)(carry & PyLong_MASK);
+            assert((carry >> PyLong_SHIFT) == 0);
+        }
+    }
+    return long_normalize(z);
+}
+```
+
+Note that when we multiply two 30-bit digits, we can get a 60-bit result. It doesn't fit into a 32-bit int, but this is not a problem since CPython uses 30-bit digits on 64-bit platforms, so 64-bit int can be used to perform the calculation. This convenience is the primary reason why CPython doesn't use bigger digit sizes.
+
+The grade-school multiplication algorithm takes $O(n^2)$ time when multiplying two n-digit bignums. [The Karatsuba multiplication algorithm](https://en.wikipedia.org/wiki/Karatsuba_algorithm) takes $O(n^{\log _{2}3})= O(n^{1.584...})$. CPython uses the latter when both operands have more than 70 digits.
+
+The idea of the Karatsuba algorithm is based on two observations. First, observe that each operand can be splitted into two parts: one consisting of low-order digits and the other consisting of high-order digits:
+
+$$x = x_1 + x_2 \times base ^ {len(x_1)}$$
+
+Then a multiplication of two n-digit bignums can be replaced with four multiplications of smaller bignums. Assuming the splitting is done so that $len(x_1) = len(y_1)$,
+
+$$xy = (x_1 + x_2 \times base ^ {len(x_1)})(y_1 + y_2 \times base ^ {len(x_1)}) = x_1x_2 + (x_1y_2 + x_2y_1) \times base ^ {len(x_1)} + x_2y_2 \times base ^ {2len(x_1)}$$
+
+The results of the four multiplications can then be calculated recursively. This algorithm, however, also works for $O(n^2)$. We can make it asymptotically faster using the following observation: four multiplications can be replace with three multiplications at the cost of a few extra additions and subtractions:
+
+$$xy = (x_1 + x_2 \times base ^ {len(x_1)})(y_1 + y_2 \times base ^ {len(x_1)}) = x_1x_2 + z \times base ^ {len(x_1)} + x_2y_2 \times base ^ {2len(x_1)}$$
+
+where $z = (x_1+x_2) (y_1+y_2) - x_1x_2 - x_2y_2$.
+
+So, we only need to calculate $x_1y_1$, $x_2y_2$ and $(x_1+x_2) (y_1+y_2)$. If we split each operand in such a way so that its parts have about half as many digits, then we get an algorithm that works for $O(n^{\log _{2}3})$. Success!
 
 
 
