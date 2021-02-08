@@ -544,9 +544,17 @@ How fast is CPython's implementation of bignums compared to other implementation
 | 15    | [Ruby](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-yarv-1.html) | 17.10    |
 | 16    | [PHP](https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-php-1.html) | 5 min    |
 
-Some languages rely on GMP to implement built-in bignums. Those are marked with asterisk.
+Some languages rely on GMP to implement built-in bignums. They are marked with an asterisk (*).
 
+The results show that CPython's implementation has decent performance. Still, GMP proves that bignums can be implemented even more efficiently. The natural question to ask is: What makes GMP's bignums faster than CPython's bignums? I can think of three main reasons:
 
+1. Some parts of GMP are written in assembly language. The code is highly optimized for different CPU architectures.
+2. GMP uses bigger digit sizes. It uses 64-bit digits on 64-bit platforms and 32-bit digits on 32-bit platforms. As a result, GMP represents the same bignums with fewer digits. Thus, arithmetic operations are performed faster. This is possible due to reason 1. For example, GMP can read the carry flag or use the [`adc`](https://www.felixcloutier.com/x86/adc) instruction to add with a carry. It can also get the 128-bit result of mutiplying two 64-bit integers with the [`mul`](https://www.felixcloutier.com/x86/mul) instruction.
+3. GMP uses more sophisticated algorithms to do bignum arithmetic. For example, the Karatsuba algorithm is not the asymptotically fastest multiplication algorithm. And GMP implements [seven](https://gmplib.org/manual/Multiplication-Algorithms) different multiplication algorithms. Which one is used depends on the operands' sizes.
+
+The performance of CPython's bignums should be enough for most applications. When it's not enough, we can use GMP bignums in a Python program with the [`gmpy2`](https://github.com/aleaxit/gmpy) module.
+
+For more comments on the results of the pidigits benchmark, check out [this article](http://www.wilfred.me.uk/blog/2014/10/20/the-fastest-bigint-in-the-west/).
 
 ## Memory usage considerations
 
