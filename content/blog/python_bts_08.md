@@ -1,5 +1,5 @@
 Title: Python behind the scenes #8: how Python integers work
-Date: 2021-02-04 5:33
+Date: 2021-02-08 14:12
 Tags: Python behind the scenes, Python, CPython
 Summary: In the previous parts of this series we studied the core of the CPython interpreter and saw how the most fundamental aspects of Python are implemented. We made an overview of [the CPython VM]({filename}/blog/python_bts_01.md), took a look at [the CPython compiler]({filename}/blog/python_bts_02.md), stepped through [the CPython source code]({filename}/blog/python_bts_03.md), studied [how the VM executes the bytecode]({filename}/blog/python_bts_04.md) and learned [how variables work]({filename}/blog/python_bts_05.md). In the two most recent posts we focused on [the Python object system]({filename}/blog/python_bts_06.md). We learned what Python objects and Python types are, how they are defined and what determines their behavior. This discussion gave us a good understanding of how Python objects work in general. What we haven't discussed is how particular objects, such as strings, integers and lists, are implemented. In this and several upcoming posts we'll cover the implementations of the most important and most interesting built-in types. The subject of today's post is `int`.
 
