@@ -1424,7 +1424,7 @@ Classes also use these mechanisms to define some attributes. For example, `__dic
 
 ## P.S.
 
-This post closes the first season of the Python behind the scenes series. We've learned a lot over this time. A lot remains to be covered. The topics on my list include: CPython's memory management, the GIL, the implementation of built-in types, the import system, concurrency and the internals of the standard modules. You can tell me what you would like to read about next time. Send your ideas and preferences to *victor@tenthousandmeters.com*.
+This post closes the first season of the Python behind the scenes series. We've learned a lot over this time. A lot remains to be covered. The topics on my list include: CPython's memory management, the GIL, the implementation of built-in types, the import system, concurrency and the internals of the standard modules. You can tell me what you would like to read about [next time]({filename}/blog/python_bts_08.md). Send your ideas and preferences to *victor@tenthousandmeters.com*.
 
 See you in 2021. Stay tuned!
 
