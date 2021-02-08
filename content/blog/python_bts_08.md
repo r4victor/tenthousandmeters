@@ -2,13 +2,15 @@ Title: Python behind the scenes #8: how Python integers work
 Date: 2021-02-04 5:33
 Tags: Python behind the scenes, Python, CPython
 
-In the previous parts of this series we studied the core of the CPython interpreter and saw how the most fundamental aspects of Python are implemented. We made an overview of the CPython VM, took a look at the CPython compiler, stepped through the CPython source code, studied how the VM executes the bytecode and learned how variables work. In the two most recent posts we focused on the Python object system. We learned what Python objects and Python types are, how they are defined and what determines their behavior. This discussion gave us a good understanding of how Python objects work in general. What we haven't discussed is how particular objects, such as strings, integers and lists, are implemented. In this and several upcoming posts we'll cover the implementations of the most important and most interesting built-in types. The subject of today's post is `int`.
+In the previous parts of this series we studied the core of the CPython interpreter and saw how the most fundamental aspects of Python are implemented. We made an overview of [the CPython VM]({filename}/blog/python_bts_01.md), took a look at [the CPython compiler]({filename}/blog/python_bts_02.md), stepped through [the CPython source code]({filename}/blog/python_bts_03.md), studied [how the VM executes the bytecode]({filename}/blog/python_bts_04.md) and learned [how variables work]({filename}/blog/python_bts_05.md). In the two most recent posts we focused on [the Python object system]({filename}/blog/python_bts_06.md). We learned what Python objects and Python types are, how they are defined and what determines their behavior. This discussion gave us a good understanding of how Python objects work in general. What we haven't discussed is how particular objects, such as strings, integers and lists, are implemented. In this and several upcoming posts we'll cover the implementations of the most important and most interesting built-in types. The subject of today's post is `int`.
+
+**Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
 ## Why Python integers are interesting
 
-Integers require no introduction. They are so ubiquitous and seem so basic that you may doubt whether it's worth discussing how they are implemented at all. Yet, Python integers are interesting because they are not just 32-bit or 64-bit integers that the CPUs work with natively. Python integers are [arbitrary-precision integers](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic), also known as bignums, which effectively means that they can be as large as you want, and their sizes are only limited by the amount of available memory.
+Integers require no introduction. They are so ubiquitous and seem so basic that you may doubt whether it's worth discussing how they are implemented at all. Yet, Python integers are interesting because they are not just 32-bit or 64-bit integers that CPUs work with natively. Python integers are [arbitrary-precision integers](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic), also known as bignums. This means that they can be as large as we want, and their sizes are only limited by the amount of available memory.
 
-Bignums are handy to work with because you don't need to worry about such things as integer overflows. They are extensively used in fields like cryptography and computer algebra where big numbers arise all the time and must be represented precisely. So, [many](https://en.wikipedia.org/wiki/List_of_arbitrary-precision_arithmetic_software) programming languages have bignums built-in. This includes Python, JavaScript, Ruby, Haskell, Erlang, Julia, Racket. Other provide bignums as a part of the standard library. This includes Go, Java, C#, D, PHP. Numerous third-party libraries implement bignums. The most popular one is [the GNU Multiple Precision Arithmetic Library](https://en.wikipedia.org/wiki/GNU_Multiple_Precision_Arithmetic_Library) (GMP), which provides a C API but has bingings for all major languages.
+Bignums are handy to work with because we don't need to worry about such things as integer overflows and underflows. They are extensively used in fields like cryptography and computer algebra where big numbers arise all the time and must be represented precisely. So, [many](https://en.wikipedia.org/wiki/List_of_arbitrary-precision_arithmetic_software) programming languages have bignums built-in. These include Python, JavaScript, Ruby, Haskell, Erlang, Julia, Racket. Others provide bignums as a part of the standard library. These include Go, Java, C#, D, PHP. Numerous third-party libraries implement bignums. The most popular one is [the GNU Multiple Precision Arithmetic Library](https://en.wikipedia.org/wiki/GNU_Multiple_Precision_Arithmetic_Library) (GMP). It provides a C API but has bindings for all major languages.
 
 There are a lot of bignum implementations. They are different in detail, but the general approach to implement bignums is the same. Today we'll see what this approach looks like and use CPython's implementation as an example. The two main questions we'll have to answer are:
 
@@ -19,9 +21,9 @@ We'll also discuss how CPython's implementation compares to others and highlight
 
 ## Bignum representation
 
-Think for a moment how you would represent big integers in your program if you were to implement them yourself. Probably the most obvious way to do that is to store an integer as a sequence of digits, just like we usually write down numbers. For example, the integer `51090942171709440000` could be represented as `['5', '1', '0', '9', '0', '9', '4', '2', '1', '7', '1', '7', '0', '9', '4', '4', '0', '0', '0', '0']`. This is essentially how bignums are represented in practice. The only important difference is that instead of base 10, much larger bases are used. For example, CPython uses base 2^15 or base 2^30 depending on the platform. What's wrong with base 10? If we represent each digit in a sequence with a single byte but use only 10 out of 256 possible values, it would be very memory-inefficient. We could solve this memory-efficiency problem if we use base 256, so that each digit takes a value between 0 and 255. But still much larger bases are used in practice. The reason for that is because larger base means that numbers have less digits, and the less digits numbers have, the faster arithmetic operations are performed. The base cannot be arbitrary large. It's typically limited by the size of the integers that the CPU can work with. We'll see why this is the case when we discuss bignum arithmetic in the next section. Now let's take a look at how CPython represents bignums.
+Think for a moment how you would represent large integers in your program if you were to implement them yourself. Probably the most obvious way to do that is to store an integer as a sequence of digits, just like we usually write down numbers. For example, the integer `51090942171709440000` could be represented as `['5', '1', '0', '9', '0', '9', '4', '2', '1', '7', '1', '7', '0', '9', '4', '4', '0', '0', '0', '0']`. This is essentially how bignums are represented in practice. The only important difference is that instead of base 10, much larger bases are used. For example, CPython uses base 2^15 or base 2^30 depending on the platform. What's wrong with base 10? If we represent each digit in a sequence with a single byte but use only 10 out of 256 possible values, it would be very memory-inefficient. We could solve this memory-efficiency problem if we use base 256, so that each digit takes a value between 0 and 255. But still much larger bases are used in practice. The reason for that is because larger base means that numbers have less digits, and the less digits numbers have, the faster arithmetic operations are performed. The base cannot be arbitrary large. It's typically limited by the size of the integers that the CPU can work with. We'll see why this is the case when we discuss bignum arithmetic in the next section. Now let's take a look at how CPython represents bignums.
 
-Everything related to the representation of Python integers can be found in `Includeg/longintrepr.h`. Technically, Python integers are instances of `PyLongObject` defined in `Include/longobject.h`, but `PyLongObject` is a typedef for `struct _longobject` that is defined in `Include/longintrepr.h`:
+Everything related to the representation of Python integers can be found in [`Include/longintrepr.h`](https://github.com/python/cpython/blob/3.9/Include/longintrepr.h). Technically, Python integers are instances of `PyLongObject`, which is defined in [`Include/longobject.h`](https://github.com/python/cpython/blob/3.9/Include/longobject.h), but `PyLongObject` is a typedef for `struct _longobject` defined in `Include/longintrepr.h` as follows:
 
 ```C
 struct _longobject {
@@ -39,12 +41,12 @@ typedef struct {
 } PyVarObject;
 ```
 
-So, besides a reference count and a type that all Python objects have, an integer has two other members: 
+So, besides a reference count and a type that all Python objects have, an integer object has two other members: 
 
 * `ob_size` that comes from `PyVarObject`; and 
 * `ob_digit` that is defined in `struct _longobject`.
 
-The `ob_digit` member is a pointer to an array of digits. On 64-bit platforms, each digit is a 30-bit integer that takes values between 0 and 2^30-1 and is stored as an unsigned 32-bit int (`digit` is a typedef for `uint32_t`). On 32-bit platforms, each digit is a 15-bit integer that takes values between 0 and 2^15-1 and is stored as an unsigned 16-bit int (`digit` is a typedef for `unsigned short`). To make things concrete, we'll use 30-bit digits throughout this post.
+The `ob_digit` member is a pointer to an array of digits. On 64-bit platforms, each digit is a 30-bit integer that takes values between 0 and 2^30-1 and is stored as an unsigned 32-bit int (`digit` is a typedef for `uint32_t`). On 32-bit platforms, each digit is a 15-bit integer that takes values between 0 and 2^15-1 and is stored as an unsigned 16-bit int (`digit` is a typedef for `unsigned short`). To make things concrete, in this post we'll assume that digits are 30 bits long.
 
 The `ob_size` member is a signed int, whose absolute value tells us the number of digits in the `ob_digit` array. The sign of `ob_size` indicates the sign of the integer. Negative `ob_size` means that the integer is negative. If `ob_size` is 0, then the integer is 0.
 
@@ -112,7 +114,7 @@ As you might guess, the representation of bignums is an easy part. The main chal
 
 ## Bignum arithmetic
 
-We learned in part 6 that the behavior of a Python object is determined by the object's type. Each member of a type, called slot, is responsible for a particular aspect of the object's behavior. So, to understand how CPython performs arithmetic operations on integers, we need to study the slots of the `int` type that implement those operations.
+We learned in [part 6]({filename}/blog/python_bts_06.md) that the behavior of a Python object is determined by the object's type. Each member of a type, called slot, is responsible for a particular aspect of the object's behavior. So, to understand how CPython performs arithmetic operations on integers, we need to study the slots of the `int` type that implement those operations.
 
 In the C code, the `int` type is called `PyLong_Type`. It's defined in `Objects/longobject.c` as follows:
 
@@ -259,12 +261,13 @@ long_add(PyLongObject *a, PyLongObject *b)
 
 So, we need to understand how `x_add()` and `x_sub()` are implemented.
 
-It turns out that the best way to add the absolute values of two bignums is the column method taught in the elementary school. We take the least significant digit of the first bignum, take the least significant digit of the second bignum, add them and write the result to the least significant digit of the output bignum. If the result of the addition doesn't fit into a single digit, we write the result modulo base and remember the carry. Then we take the second least significant digit of the first bignum, the second least significant digit of the second bignum, add them to the carry, write the result modulo base to the second least significant digit of the output bignum and remeber the carry. The process continues until no digits are left and the last carry is written to the output bignum. Here's CPython's implementation of this algorithm:
+It turns out that the best way to add the absolute values of two bignums is the column method taught in the elementary school. We take the least significant digit of the first bignum, take the least significant digit of the second bignum, add them up and write the result to the least significant digit of the output bignum. If the result of the addition doesn't fit into a single digit, we write the result modulo base and remember the carry. Then we take the second least significant digit of the first bignum, the second least significant digit of the second bignum, add them to the carry, write the result modulo base to the second least significant digit of the output bignum and remeber the carry. The process continues until no digits are left and the last carry is written to the output bignum. Here's CPython's implementation of this algorithm:
 
 ```C
 // Some typedefs and macros used in the algorithm:
 // typedef uint32_t digit;
 // #define PyLong_SHIFT    30
+// #define PyLong_BASE     ((digit)1 << PyLong_SHIFT)
 // #define PyLong_MASK     ((digit)(PyLong_BASE - 1))
 
 
@@ -302,17 +305,24 @@ x_add(PyLongObject *a, PyLongObject *b)
 }
 ```
 
-First note that Python integers are immutable and when CPython performs some arithmetic operation, it always returns a new integer as a result. The size of the new integer is initially set to the maximum possible size of the result. Then if, after the operation is performed, some leading digits happen to be zeros, CPython shrinks the size of the integer by calling `long_normalize()`. In the case of addition, CPython creates a new integer that is one digit longer than the biggest of the two input integers. Then if, after the operation is performed, the most significant digit of the result happens to be 0, it decrements the size of the result by one.
+First note that Python integers are immutable. CPython returns a new integer as a result of an arithmetic operation. The size of the new integer is initially set to the maximum possible size of the result. Then if, after the operation is performed, some leading digits happen to be zeros, CPython shrinks the size of the integer by calling `long_normalize()`. In the case of addition, CPython creates a new integer that is one digit longer than the biggest of the two input integers. Then if, after the operation is performed, the most significant digit of the result happens to be 0, CPython decrements the size of the result by one.
 
-Note also that a digit takes lower 30 bits of the 32-bit int. When we add two digits, we get at most 31-bit integer and the carry is stored at the bit 31.
+Note also that a digit takes lower 30 bits of the 32-bit int. When we add two digits, we get at most 31-bit integer and the carry is stored at the bit 30 (counting from 0), so we can easily access it.
 
 Subtraction of the absolute values of two bignums is done in a similar manner except that carrying is replaced with borrowing. We also need to ensure that the first bignum is the larger of the two. If this is not the case, we swap the bignums and change the sign of the result after the subtraction is performed. As it is implemented in CPython, the borrowing is easy because according to the C specification, unsigned ints are a subject to a modular arithmetic:
 
 > Otherwise, if the new type is unsigned, the value is converted by repeatedly adding or subtracting one more than the maximum value that can be represented in the new type until the value is in the range of the new type.
 
-This means that when we substract a larger digit from a smaller one, the maximum possible int is added to the result to get a value in the valid range. For example, `1 - 2 = -1 + (2**32 - 1) = 4294967294 `. To get the effect of borrowing, we write the lower 30 bits to the result and check the bit 31 to see if the borrowing happened. Here's how CPython does all of that:
+This means that when we substract a larger digit from a smaller one, the maximum possible int is added to the result to get a value in the valid range. For example, `1 - 2 = -1 + (2**32 - 1) = 4294967294 `. To get the effect of borrowing, we write the bits 0-29 to the result and check the bit 30 to see if the borrowing happened. Here's how CPython does all of that:
 
 ```C
+// Some typedefs and macros used in the algorithm:
+// typedef uint32_t digit;
+// #define PyLong_SHIFT    30
+// #define PyLong_BASE     ((digit)1 << PyLong_SHIFT)
+// #define PyLong_MASK     ((digit)(PyLong_BASE - 1))
+
+
 static PyLongObject *
 x_sub(PyLongObject *a, PyLongObject *b)
 {
@@ -420,14 +430,14 @@ long_sub(PyLongObject *a, PyLongObject *b)
 }
 ```
 
-If both integers comprise of at most one digit, CPython doesn't calls `x_add()` or `x_sub()` but simply computes the result with a single operation. If the result also fits into a single digit, no more calculations are required, and bignums are effectively added (or subtracted) as if they were native integers.
+If both integers comprise of at most one digit, CPython doesn't call `x_add()` or `x_sub()` but simply computes the result with a single operation. If the result also fits into a single digit, no more calculations are required, and bignums are effectively added (or subtracted) as if they were native integers.
 
 ### Multiplication
 
-There is no silver-bullet algorithm for bignum multiplication. Several algorithms are used in practice because some perform better on relatively small bignums, others on large and extremely large bignums. CPython uses two multiplication algorithms:
+There is no silver-bullet algorithm for bignum multiplication. Several algorithms are used in practice because some perform better on relatively small bignums, others on large and extremely large bignums. CPython implements two multiplication algorithms:
 
-* the grade-school multiplication algorithm used by default; and
-* [the Karatsuba multiplication algorithm](https://en.wikipedia.org/wiki/Karatsuba_algorithm) used when both integers have more than 70 digits.
+* the grade-school multiplication algorithm that is used by default; and
+* [the Karatsuba multiplication algorithm](https://en.wikipedia.org/wiki/Karatsuba_algorithm) that is used when both integers have more than 70 digits.
 
 Wkipedia [summarizes](https://en.wikipedia.org/wiki/Multiplication_algorithm#Long_multiplication) the grade-school multiplication algorithm as follows:
 
@@ -448,6 +458,7 @@ This optimization saves both memory and time. The best way to understand other d
 // typedef uint32_t digit;
 // typedef uint64_t twodigits;
 // #define PyLong_SHIFT    30
+// #define PyLong_BASE     ((digit)1 << PyLong_SHIFT)
 // #define PyLong_MASK     ((digit)(PyLong_BASE - 1))
 
 
@@ -499,7 +510,7 @@ x_mul(PyLongObject *a, PyLongObject *b)
 }
 ```
 
-Note that when we multiply two 30-bit digits, we can get a 60-bit result. It doesn't fit into a 32-bit int, but this is not a problem since CPython uses 30-bit digits on 64-bit platforms, so 64-bit int can be used to perform the calculation. This convenience is the primary reason why CPython doesn't use bigger digit sizes.
+Note that when we multiply two 30-bit digits, we can get a 60-bit result. It doesn't fit into a 32-bit int, but this is not a problem since CPython uses 30-bit digits on 64-bit platforms, so 64-bit int can be used to perform the calculation. This convenience is the primary reason why CPython doesn't use larger digit sizes.
 
 The grade-school multiplication algorithm takes $O(n^2)$ time when multiplying two n-digit bignums. [The Karatsuba multiplication algorithm](https://en.wikipedia.org/wiki/Karatsuba_algorithm) takes $O(n^{\log _{2}3})= O(n^{1.584...})$. CPython uses the latter when both operands have more than 70 digits.
 
@@ -511,7 +522,7 @@ Then a multiplication of two n-digit bignums can be replaced with four multiplic
 
 $$xy = (x_1 + x_2 \times base ^ {len(x_1)})(y_1 + y_2 \times base ^ {len(x_1)}) = x_1x_2 + (x_1y_2 + x_2y_1) \times base ^ {len(x_1)} + x_2y_2 \times base ^ {2len(x_1)}$$
 
-The results of the four multiplications can then be calculated recursively. This algorithm, however, also works for $O(n^2)$. We can make it asymptotically faster using the following observation: four multiplications can be replace with three multiplications at the cost of a few extra additions and subtractions:
+The results of the four multiplications can then be calculated recursively. This algorithm, however, also works for $O(n^2)$. We can make it asymptotically faster using the following observation: four multiplications can be replaced with three multiplications at the cost of a few extra additions and subtractions:
 
 $$xy = (x_1 + x_2 \times base ^ {len(x_1)})(y_1 + y_2 \times base ^ {len(x_1)}) = x_1x_2 + z \times base ^ {len(x_1)} + x_2y_2 \times base ^ {2len(x_1)}$$
 
@@ -519,7 +530,7 @@ where $z = (x_1+x_2) (y_1+y_2) - x_1x_2 - x_2y_2$.
 
 So, we only need to calculate $x_1y_1$, $x_2y_2$ and $(x_1+x_2) (y_1+y_2)$. If we split each operand in such a way so that its parts have about half as many digits, then we get an algorithm that works for $O(n^{\log _{2}3})$. Success!
 
-The bignum division is a bit harder to implement. We won't discuss it here, but it's essentially the familiar [long division](https://en.wikipedia.org/wiki/Long_division) algorithm. Check out `Objects/longobject.c` to see how bignum division and other arithmetic operations are implemented in CPython. The descriptions of the implemented algorithms can be found in [the chapter 14](http://cacr.uwaterloo.ca/hac/about/chap14.pdf) of the Handbook of Applied Cryptography by Alfred Menezes (it's free!).
+The bignum division is a bit harder to implement. We won't discuss it here, but it's essentially the familiar [long division](https://en.wikipedia.org/wiki/Long_division) algorithm. Check out [`Objects/longobject.c`](https://github.com/python/cpython/blob/3.9/Objects/longobject.c) to see how bignum division and other arithmetic operations are implemented in CPython. The descriptions of the implemented algorithms can be found in [the chapter 14](http://cacr.uwaterloo.ca/hac/about/chap14.pdf) of the Handbook of Applied Cryptography by Alfred Menezes (it's free!).
 
 ## CPython's bignums vs other bignum implementations
 
@@ -549,16 +560,33 @@ Some languages rely on GMP to implement built-in bignums. They are marked with a
 The results show that CPython's implementation has decent performance. Still, GMP proves that bignums can be implemented even more efficiently. The natural question to ask is: What makes GMP's bignums faster than CPython's bignums? I can think of three main reasons:
 
 1. Some parts of GMP are written in assembly language. The code is highly optimized for different CPU architectures.
-2. GMP uses bigger digit sizes. It uses 64-bit digits on 64-bit platforms and 32-bit digits on 32-bit platforms. As a result, GMP represents the same bignums with fewer digits. Thus, arithmetic operations are performed faster. This is possible due to reason 1. For example, GMP can read the carry flag or use the [`adc`](https://www.felixcloutier.com/x86/adc) instruction to add with a carry. It can also get the 128-bit result of mutiplying two 64-bit integers with the [`mul`](https://www.felixcloutier.com/x86/mul) instruction.
+2. GMP uses bigger digit sizes. It uses 64-bit digits on 64-bit platforms and 32-bit digits on 32-bit platforms. As a result, GMP represents the same integers with fewer digits. Thus, arithmetic operations are performed faster. This is possible due to reason 1. For example, GMP can read the carry flag or use the [`adc`](https://www.felixcloutier.com/x86/adc) instruction to add with carry. It can also get the 128-bit result of mutiplying two 64-bit integers with the [`mul`](https://www.felixcloutier.com/x86/mul) instruction.
 3. GMP uses more sophisticated algorithms to do bignum arithmetic. For example, the Karatsuba algorithm is not the asymptotically fastest multiplication algorithm. And GMP implements [seven](https://gmplib.org/manual/Multiplication-Algorithms) different multiplication algorithms. Which one is used depends on the operands' sizes.
 
-The performance of CPython's bignums should be enough for most applications. When it's not enough, we can use GMP bignums in a Python program with the [`gmpy2`](https://github.com/aleaxit/gmpy) module.
+The performance of CPython's bignums should be enough for most applications. When it's not enough, GMP's bignums can be used in a Python program with the [`gmpy2`](https://github.com/aleaxit/gmpy) module.
 
 For more comments on the results of the pidigits benchmark, check out [this article](http://www.wilfred.me.uk/blog/2014/10/20/the-fastest-bigint-in-the-west/).
 
 ## Memory usage considerations
 
+Python integers take a considerable amount of memory. Even the smallest integers take 28 bytes on 64-bit platforms:
 
+* a reference count `ob_refcnt`: 8 bytes
+* a type `ob_type`: 8 bytes
+* an object's size `ob_size`: 8 bytes
+* `ob_digit`: 4 bytes.
 
+Allocating a list of a million integers requires allocating the integers themselves plus a million references to them, which is about 35 megabytes in total. Compare it to 4 megabytes required to allocate an array of a million 32-bit ints. So, sometimes it makes sense to use the [`array`](https://docs.python.org/3/library/array.html) module or [`numpy`](https://github.com/numpy/numpy) to store large amounts of homogenous data.
 
+We said before that CPython creates a new integer object on every arithmetic operation. Fortunately, it employs an optimization to allocate small integers only once during the interpreter's lifetime. The integers in the range [-5, 256] are preallocated when CPython starts. Then, when CPython needs to create a new integer object, it first checks if the integer value is in the range [-5, 256] and, if it is in the range, returns the preallocated object. The elimination of extra memory allocations saves both memory and time.
+
+The range [-5, 256] is choosen because the values in this range are extensively used throughout CPython and the Python standard library. For more details on the choice, check out [this article](https://groverlab.org/hnbfpr/2017-06-22-fun-with-sys-getrefcount.html).
+
+## Conclusion
+
+The design of built-in types has certainly contributed to the Python's success. Python integers serve as an example of a quite efficient and, at the same time, accessible bignum implementation. We made use of this fact today to learn both about Python integers and about bignums. Next time we'll continue to study Python built-in types. Stay tuned to learn about how Python strings work.
+
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
 
