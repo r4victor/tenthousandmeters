@@ -16,7 +16,7 @@ Bignums are handy to work with because we don't need to worry about such things 
 There are a lot of bignum implementations. They're different in detail, but the general approach to implement bignums is the same. Today we'll see what this approach looks like and use CPython's implementation as a reference example. The two main questions we'll have to answer are:
 
 * how to represent bignums; and
-* how to performs arithmetic operations, such as addition and multiplication, on bignums.
+* how to perform arithmetic operations, such as addition and multiplication, on bignums.
 
 We'll also discuss how CPython's implementation compares to others and what CPython does to make integers more efficient. 
 
