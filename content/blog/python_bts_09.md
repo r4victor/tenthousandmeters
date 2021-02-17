@@ -2,7 +2,7 @@ Title: Python behind the scenes #9: how Python strings work
 Date: 2021-02-09 9:30
 Tags: Python behind the scenes, Python, CPython
 
-In 1991 Guido van Rossum released the first version of the Python programming language to the world. About that time the world began to witness a major change in how computer systems represent written language. The internalization of the Internet increased the demand to support different writing systems, and the Unicode standard was developed to meet this demand. Unicode defined a single character set able to represent any written language, various non-alphanumeric symbols and, eventually, emoji 😀. Python wasn't designed with Unicode in mind, but it evolved towards Unicode support during the years. In 2000, PEP 100 added built-in support for Unicode strings – the `unicode` type that later became the `str` type in Python 3. Python strings have been proven to be a handy way to work with text in the Unicode age. Today we'll see how they work behind the scenes.
+In 1991 Guido van Rossum released the first version of the Python programming language to the world. About that time the world began to witness a major change in how computer systems represent written language. The internalization of the Internet increased the demand to support different writing systems, and the Unicode standard was developed to meet this demand. Unicode defined a universal character set able to represent any written language, various non-alphanumeric symbols and, eventually, emoji 😀. Python wasn't designed with Unicode in mind, but it evolved towards Unicode support during the years. The major change happened when Python got a built-in support for Unicode strings – the `unicode` type that later became the `str` type in Python 3. Python strings have been proven to be a handy way to work with text in the Unicode age. Today we'll see how they work behind the scenes.
 
 ## The scope of this post
 
@@ -14,7 +14,7 @@ This post doesn't try to cover all aspects of text encoding in relation to Pytho
 
 This post focuses on the last problem. But before we dive into the internals of Python strings, let's briefly discuss the problem of text encoding on a real life example and clarify what Unicode really is.
 
-## Text encoding is everywhere
+## The essence of text encoding
 
 You see this text as a sequence of characters rendered by your browser and displayed on your screen. I see this text as the same sequence of characters as I type it into my editor. In order for us to see the same thing, your browser and my editor must be able to represent the same set of characters, that is, they must agree on a **character set**. They also need to choose some, possibly different, ways to represent the text internally to be able to work with it. For example, they may choose to associate each character with a unit consisting of one or more bytes and represent the text as a sequence of those units. Such a mapping is usually referred to as a **character encoding**. A character encoding is also crucial for our communication. Your browser and my webserver must must agree on how to **encode** text into bytes and **decode** text from bytes, since bytes is what they transmit to talk to each other.
 
@@ -35,7 +35,7 @@ Even if you save this HTML page locally, your browser will still be able to dete
 </html>
 ```
 
-This may seem absurd to you. How can a browser decode the HTML to read the encoding if it doesn't know the encoding yet? This is usually not a problem in practice because the beginning of an HTML page contains only ASCII characters and most encodings used on the web encode ASCII characters in the same way. Check out [the HTML standard](https://html.spec.whatwg.org/multipage/parsing.html#concept-encoding-confidence) to learn more about the algorithm that browsers use to determine the encoding.
+This may seem absurd to you. How can a browser decode the HTML to read the encoding if it doesn't know the encoding yet? This is usually not a problem in practice because the beginning of an HTML page contains only ASCII characters and most encodings used on the web encode ASCII characters in the same way. Check out the [HTML standard](https://html.spec.whatwg.org/multipage/parsing.html#concept-encoding-confidence) to learn more about the algorithm that browsers use to determine the encoding.
 
 Note that the HTTP header and the HTML metatag specify "charset", i.e. a character set. This may seem confusing since UTF-8 is not a character set. What they really specify is a character encoding. The two terms are often used interchangeably because character encodings typically imply a character set of the same name. For example, the ASCII character encoding implies the ASCII character set. The Unicode Standard fixes the terminology by giving precise definitions to all important terms. We'll study them, but before, let's discuss why and how the Unicode project began.
 
@@ -75,7 +75,7 @@ Unicode doesn't map characters to bytes directly. It does the mapping in two ste
 1. The **coded character set** maps characters to code points.
 2. A **character encoding form**, such as UTF-8, maps code points to sequences of code units, where each code unit is a sequence of one or more bytes.
 
-The Unicode coded character set is what we usually mean when we say Unicode. It's the same thing as the UCS defined by ISO 10646. The word "coded" means that it's not actually a set but a mapping. This mapping assigns a code point to each character in the character set. A **code point** is just an integer in the range [0, 1114111], which is written as U+0000..U+10FFFF in the Unicode hexadecimal notation. The range of code points is called a **code space.** As of Unicode 13.0, out of 1,114,112 code points in the code space 143,859 are assigned.
+The Unicode coded character set is what we usually mean when we say Unicode. It's the same thing as the UCS defined by ISO 10646. The word "coded" means that it's not actually a set but a mapping. This mapping assigns a code point to each character in the character set. A **code point** is just an integer in the range [0, 1114111], which is written as U+0000..U+10FFFF in the Unicode hexadecimal notation and is called a **code space**. The current Unicode 13.0 assigns code points to 143,859 characters.
 
 Techically, the coded character set is a [collection of entries](https://www.unicode.org/charts/). Each entry defines a character and assigns a code point to it by specifying three pieces of information:
 
@@ -106,6 +106,54 @@ To encode a code point, we choose an appropriate template from the table above a
 
 Note that UTF-8 represents all ASCII characters using just one byte, so that any ASCII-encoded text is also a UTF-8-encoded text. This feature is one of the reasons why UTF-8 gained adoption and [became](https://googleblog.blogspot.com/2008/05/moving-to-unicode-51.html) the most dominant encoding on the web.
 
-## Python's road to Unicode support
+This section should give us a basic idea of how Unicode works. If you want to learn more about Unicode, I really recommend reading the first few chapters of the [Unicode Standard](https://www.unicode.org/versions/Unicode13.0.0/).
+
+## The brief history of Python strings
+
+The way Python strings work today is very different from the way Python strings worked when Python was first released. This aspect of the language changed significantly multiple times. To better understand why modern Python strings work the way they do, let's take a quick look into the past.
+
+Initially, Python had one built-in type to represent strings – the `str` type. It wasn't the `str` type we know today. Python strings were byte strings, that is, sequences of bytes, and worked similar to how `bytes` objects work in Python 3. This is in constrast to Python 3 strings that are Unicode strings.
+
+Since byte strings were sequences of bytes, they were used to represent all kinds of data: sequences of ASCII characters, UTF-8-encoded texts and arbitrary arrays of bytes. Byte strings themselves didn't hold any information about the encoding. It was up to a program to interpret the values. For example, we could put a UTF-8-encoded text into a byte string, print it to the stdout and see the actual Unicode characters if the terminal encoding was UTF-8:
+
+```pycon
+$ python2.7
+>>> s = '\xe2\x9c\x85'
+>>> print(s)
+✅
+```
+
+Though byte strings were sequences of bytes, they were called strings for a reason. The reason is that Python provided string methods for byte strings, such as `str.split()` and `str.upper()`. Think about what the `str.upper()` method should do on a sequence of bytes. It doesn't make sense to take a byte and convert it to an uppercase variant because bytes don't have case. It starts make sense if we assume that the sequences of bytes is a text in some encoding. That's exactly what Python did. The assumed encoding depended on a [locale](https://en.wikipedia.org/wiki/Locale_(computer_software)). Typically, it was ASCII. We could change the locale, so that string methods started to work on non-ASCII encoded text:
+
+```pycon
+$ python2.7
+>>> s = '\xef\xe8\xf2\xee\xed' # Russian 'питон' in the encoding windows-1251
+>>> '\xef\xe8\xf2\xee\xed'.upper() # does nothing since characters are non-ascii
+'\xef\xe8\xf2\xee\xed'
+>>> import locale
+>>> locale.setlocale(locale.LC_ALL , 'ru_RU.CP1251')
+'ru_RU.CP1251'
+>>> '\xef\xe8\xf2\xee\xed'.upper() # converts to uppercase
+'\xcf\xc8\xd2\xce\xcd'
+>>> print('\xef\xe8\xf2\xee\xed'.upper().decode('windows-1251')) # let's print it
+ПИТОН
+```
+
+The implementation of this logic relied on the C standard library. It worked for 8-bit fixed-width encodings but didn't work for UTF-8 or any other Unicode encoding. In short, Python had no Unicode strings back then.
+
+Then the `unicode` type was introduced. This happened before Python 2 when PEPs hadn't existed yet. The change was only later described in [PEP 100](https://www.python.org/dev/peps/pep-0100/). The instances of `unicode` were true Unicode strings, that is, sequences of code points (or, if you prefer, sequences of Unicode characters). They worked much like strings we have today:
+
+```pycon
+$ python2.7
+>>> s = u'питон' # note unicode literal
+>>> s # each element is a code point
+u'\u043f\u0438\u0442\u043e\u043d'
+>>> s[1] # can index code points
+u'\u0438'
+>>> print(s.upper()) # string methods work
+ПИТОН
+```
+
+Python used the UCS-2 encoding to represent Unicode strings internally. UCS-2 was capable of encoding all the code points that were assigned at that moment. But then Unicode assigned first code points outside the Basic Multilingual Plane, and UCS-2 could no longer encode all the code points.
 
 ## Meet Python strings
