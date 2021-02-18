@@ -108,11 +108,11 @@ Note that UTF-8 represents all ASCII characters using just one byte, so that any
 
 This section should give us a basic idea of how Unicode works. If you want to learn more about Unicode, I really recommend reading the first few chapters of the [Unicode Standard](https://www.unicode.org/versions/Unicode13.0.0/).
 
-## The brief history of Python strings
+## A brief history of Python strings
 
 The way Python strings work today is very different from the way Python strings worked when Python was first released. This aspect of the language changed significantly multiple times. To better understand why modern Python strings work the way they do, let's take a quick look into the past.
 
-Initially, Python had one built-in type to represent strings – the `str` type. It wasn't the `str` type we know today. Python strings were byte strings, that is, sequences of bytes, and worked similar to how `bytes` objects work in Python 3. This is in constrast to Python 3 strings that are Unicode strings.
+Initially, Python had one built-in type to represent strings – the `str` type. It was not the `str` type we know today. Python strings were byte strings, that is, sequences of bytes, and worked similar to how `bytes` objects work in Python 3. This is in constrast to Python 3 strings that are Unicode strings.
 
 Since byte strings were sequences of bytes, they were used to represent all kinds of data: sequences of ASCII characters, UTF-8-encoded texts and arbitrary arrays of bytes. Byte strings themselves didn't hold any information about the encoding. It was up to a program to interpret the values. For example, we could put a UTF-8-encoded text into a byte string, print it to the stdout and see the actual Unicode characters if the terminal encoding was UTF-8:
 
@@ -123,7 +123,7 @@ $ python2.7
 ✅
 ```
 
-Though byte strings were sequences of bytes, they were called strings for a reason. The reason is that Python provided string methods for byte strings, such as `str.split()` and `str.upper()`. Think about what the `str.upper()` method should do on a sequence of bytes. It doesn't make sense to take a byte and convert it to an uppercase variant because bytes don't have case. It starts make sense if we assume that the sequences of bytes is a text in some encoding. That's exactly what Python did. The assumed encoding depended on a [locale](https://en.wikipedia.org/wiki/Locale_(computer_software)). Typically, it was ASCII. We could change the locale, so that string methods started to work on non-ASCII encoded text:
+Though byte strings were sequences of bytes, they were called strings for a reason. The reason is that Python provided string methods for byte strings, such as `str.split()` and `str.upper()`. Think about what the `str.upper()` method should do on a sequence of bytes. It doesn't make sense to take a byte and convert it to an uppercase variant because bytes don't have case. It starts make sense if we assume that the sequence of bytes is a text in some encoding. That's exactly what Python did. The assumed encoding depended on a [locale](https://en.wikipedia.org/wiki/Locale_(computer_software)). Typically, it was ASCII. We could change the locale, so that string methods started to work on non-ASCII encoded text:
 
 ```pycon
 $ python2.7
@@ -154,6 +154,38 @@ u'\u0438'
 ПИТОН
 ```
 
-Python used the UCS-2 encoding to represent Unicode strings internally. UCS-2 was capable of encoding all the code points that were assigned at that moment. But then Unicode assigned first code points outside the Basic Multilingual Plane, and UCS-2 could no longer encode all the code points.
+Python used the UCS-2 encoding to represent Unicode strings internally. UCS-2 was capable of encoding all the code points that were assigned at that moment. But then Unicode assigned first code points outside the Basic Multilingual Plane, and UCS-2 could no longer encode all the code points. Python switched from UCS-2 to UTF-16. Now any code point outside the Basic Multilingual Plane could be represented by a surrogate pair. This caused another problem. Since UTF-16 is a variable-width encoding, getting the nth code point of a string requires scanning the string until that code point is found. Python had string indexing in constant time and didn't want to lose that. So, what happend is that Unicode objects siezed to be true Unicode strings and became sequence of code units. This had the following consequences:
+
+```pycon
+$ python2.7
+>>> u'hello'[4] # indexing is still supported and works fast
+u'o'
+>>> len(u'😀') # but length of a character outside BMP is 2
+2
+>>> u'😀'[1] # and indexing returns code units, not code points
+u'\ude00'
+```
+
+[PEP 261](https://www.python.org/dev/peps/pep-0261/) tried to revive true Unicode strings. It introduced a compile-time option that enabled the UCS-4 encoding. Now Python could be compiled in a "narrow" mode or in a "wide" mode, and the choice of the mode affected the way Unicode objects worked. UCS-4 could not replace UTF-16 altogether because of its space-inefficiency, so both had to coexist. Internally, Unicode object was represented as an array of `Py_UNICODE` elements. The `Py_UNICODE` type was set to `wchar_t` if the size of `wchar_t` was compatible with the mode. Otherwise, it was set to either `unsigned short` (UTF-16) or  `unsigned long` (UCS-4).
+
+In the meantime, Python developers focused their attention on another source of confusion: the coexistence of byte strings and Unicode strings. There were several problems with this. For example, it was possible to mix two types:
+
+```pycon
+>>> "I'm str" + u" and I'm unicode"
+u"I'm str and I'm unicode"
+```
+
+Unless it wasn't:
+
+```pycon
+>>> "I'm str \x80" + u" and I'm unicode"
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+UnicodeDecodeError: 'ascii' codec can't decode byte 0x80 in position 8: ordinal not in range(128)
+```
+
+The famous Python 3.0 release renamed the `unicode` type to the `str` type and replaced the `str` type with the `bytes` type. The essence of this change summarized in the [release notes](https://docs.python.org/3/whatsnew/3.0.html#text-vs-data-instead-of-unicode-vs-8-bit):
+
+> The biggest difference with the 2.x situation is that any attempt to mix text and data in Python 3.0 raises `TypeError`, whereas if you were to mix Unicode and 8-bit strings in Python 2.x, it would work if the 8-bit string happened to contain only 7-bit (ASCII) bytes, but you would get `UnicodeDecodeError` if it contained non-ASCII values. This value-specific behavior has caused numerous sad faces over the years.
 
 ## Meet Python strings
