@@ -166,7 +166,7 @@ u'o'
 u'\ude00'
 ```
 
-[PEP 261](https://www.python.org/dev/peps/pep-0261/) tried to revive true Unicode strings. It introduced a compile-time option that enabled the UCS-4 encoding. Now Python could be compiled in a "narrow" mode or in a "wide" mode, and the choice of the mode affected the way Unicode objects worked. UCS-4 could not replace UTF-16 altogether because of its space-inefficiency, so both had to coexist. Internally, Unicode object was represented as an array of `Py_UNICODE` elements. The `Py_UNICODE` type was set to `wchar_t` if the size of `wchar_t` was compatible with the mode. Otherwise, it was set to either `unsigned short` (UTF-16) or  `unsigned long` (UCS-4).
+[PEP 261](https://www.python.org/dev/peps/pep-0261/) tried to revive true Unicode strings. It introduced a compile-time option that enabled the UCS-4 encoding. Now Python had two distinct builds: a "narrow" build and a "wide" build. The choice of the build affected the way Unicode objects worked. UCS-4 could not replace UTF-16 altogether because of its space-inefficiency, so both had to coexist. Internally, Unicode object was represented as an array of `Py_UNICODE` elements. The `Py_UNICODE` type was set to `wchar_t` if the size of `wchar_t` was compatible with the build. Otherwise, it was set to either `unsigned short` (UTF-16) or  `unsigned long` (UCS-4).
 
 In the meantime, Python developers focused their attention on another source of confusion: the coexistence of byte strings and Unicode strings. There were several problems with this. For example, it was possible to mix two types:
 
@@ -188,4 +188,66 @@ The famous Python 3.0 release renamed the `unicode` type to the `str` type and r
 
 > The biggest difference with the 2.x situation is that any attempt to mix text and data in Python 3.0 raises `TypeError`, whereas if you were to mix Unicode and 8-bit strings in Python 2.x, it would work if the 8-bit string happened to contain only 7-bit (ASCII) bytes, but you would get `UnicodeDecodeError` if it contained non-ASCII values. This value-specific behavior has caused numerous sad faces over the years.
 
-## Meet Python strings
+Python strings became the Python strings we know today with the release of Python 3.3. [PEP 393](https://www.python.org/dev/peps/pep-0393/) got rid of "narrow" and "wide" builds and introduced the flexible string representation. This representation made Python strings true Unicode strings without exceptions. Its essence can be summarized as follows. Three different fixed-width encodings are used to represent strings: UCS-1, UCS-2 and UCS-4. Which encoding is used for a given string depends on the largest code point of that string:
+
+* If all code points are in the range U+0000..U+00FF, then UCS-1 is used. UCS-1 encodes code points in that range with one byte and does not encode other code points at all. It's equivalent to the Latin-1 (ISO 8859-1) encoding.
+* If all code points are in the range U+0000..U+FFFF and at least one code point is in the range U+0100..U+FFFF, then UCS-2 is used.
+* Finally, if at least one code point is in the range U+10000..U+10FFFF, then UCS-4 is used.
+
+In addition to this, CPython distinguishes the case when a string contains only ASCII characters. Such strings are encoded using UCS-1 but stored in a special way. Let's take a look at the actual code to understand the details.
+
+## Meet modern Python strings
+
+CPython uses three structs to represent string objects: `PyASCIIObject`, `PyCompactUnicodeObject` and `PyUnicodeObject`. The second one extends the first one, and the third one extends the second one:
+
+```C
+typedef struct {
+  PyObject_HEAD
+  Py_ssize_t length;
+  Py_hash_t hash;
+  struct {
+      unsigned int interned:2;
+      unsigned int kind:2;
+      unsigned int compact:1;
+      unsigned int ascii:1;
+      unsigned int ready:1;
+  } state;
+  wchar_t *wstr;
+} PyASCIIObject;
+
+typedef struct {
+  PyASCIIObject _base;
+  Py_ssize_t utf8_length;
+  char *utf8;
+  Py_ssize_t wstr_length;
+} PyCompactUnicodeObject;
+
+typedef struct {
+  PyCompactUnicodeObject _base;
+  union {
+      void *any;
+      Py_UCS1 *latin1;
+      Py_UCS2 *ucs2;
+      Py_UCS4 *ucs4;
+  } data;
+} PyUnicodeObject;
+```
+
+Why do we need all these structs? Recall that CPython provides the [Python/C API](https://docs.python.org/3/c-api/index.html) that allows writing C extensions. In particular, it provides a [set of functions to work with strings](https://docs.python.org/3/c-api/unicode.html#unicode-objects-and-codecs). Many of these functions expose the internal representation of strings, so PEP 393 could not get rid of the old representation without breaking C extensions. One of the reasons why the current representation of strings is more compilcated than it should be is because CPython continues to provide the old API. For example, it provides the `PyUnicode_AsUnicode()` function that returns the `Py_UNICODE*` representation of a string.
+
+Let's first see how CPython represents strings created using the new API. These are called "canonical" strings. They include all the strings that we create when we write Python code. The `PyASCIIObject` struct is used to represent ASCII-only strings. The buffer that holds a string is not a part of the struct but immediately follows it. The allocation is done at once like this:
+
+```C
+obj = (PyObject *) PyObject_MALLOC(struct_size + (size + 1) * char_size);
+```
+
+The `PyCompactUnicodeObject` struct is used to represent all other Unicode strings. The buffer is allocated in the same way right after the struct. Only `struct_size` is different and `char_size` can be `1`,  `2` or `4`.
+
+The reason why both `PyASCIIObject` and `PyCompactUnicodeObject` exist is because of an optimization. It's often neccessary to get a UTF-8 representation of a string. If a string is an ASCII-only string, then CPython can simply return the data stored in the buffer. But otherwise, CPython has to perform a conversion from the current encoding to UTF-8. The `utf8` field of `PyCompactUnicodeObject` is used to store the cached UTF-8 representation. A UTF-8 representation is not always cached. The special API function [`PyUnicode_AsUTF8AndSize()`](https://docs.python.org/3/c-api/unicode.html#c.PyUnicode_AsUTF8AndSize)  should be called when the cache is needed.
+
+If someone requests the old `Py_UNICODE*` representation of a "compact" string, then CPython may need to perform a conversion. Similiarly to `utf8`, the `wstr` field of `PyASCIIObject` is used to store the cached `Py_UNICODE*` representation. 
+
+The old API allowed creating strings with a `NULL` buffer and filling the buffer afterwards. Today the strings created in this way are called "legacy" strings. They are represented by the `PyUnicodeObject` struct. Initially, they have only the `Py_UNICODE*` representation. The `wstr` field is used to hold it. The users of the API must call the [`PyUnicode_READY()`](https://docs.python.org/3/c-api/unicode.html#c.PyUnicode_READY) function on "legacy" strings to make them work with the new API. This function stores the canonical (USC-1, UCS-2 or UCS-4) representation of a string in the `data` field of `PyUnicodeObject`.
+
+The old API is still supported but deprecated. [PEP 623](https://www.python.org/dev/peps/pep-0623/) lays down a plan to remove it in Python 3.12.
+
