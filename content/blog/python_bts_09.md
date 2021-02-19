@@ -198,7 +198,7 @@ In addition to this, CPython distinguishes the case when a string contains only 
 
 ## Meet modern Python strings
 
-CPython uses three structs to represent string objects: `PyASCIIObject`, `PyCompactUnicodeObject` and `PyUnicodeObject`. The second one extends the first one, and the third one extends the second one:
+CPython uses three structs to represent strings: `PyASCIIObject`, `PyCompactUnicodeObject` and `PyUnicodeObject`. The second one extends the first one, and the third one extends the second one:
 
 ```C
 typedef struct {
@@ -245,9 +245,34 @@ The `PyCompactUnicodeObject` struct is used to represent all other Unicode strin
 
 The reason why both `PyASCIIObject` and `PyCompactUnicodeObject` exist is because of an optimization. It's often neccessary to get a UTF-8 representation of a string. If a string is an ASCII-only string, then CPython can simply return the data stored in the buffer. But otherwise, CPython has to perform a conversion from the current encoding to UTF-8. The `utf8` field of `PyCompactUnicodeObject` is used to store the cached UTF-8 representation. A UTF-8 representation is not always cached. The special API function [`PyUnicode_AsUTF8AndSize()`](https://docs.python.org/3/c-api/unicode.html#c.PyUnicode_AsUTF8AndSize)  should be called when the cache is needed.
 
-If someone requests the old `Py_UNICODE*` representation of a "compact" string, then CPython may need to perform a conversion. Similiarly to `utf8`, the `wstr` field of `PyASCIIObject` is used to store the cached `Py_UNICODE*` representation. 
+If someone requests the old `Py_UNICODE*` representation of a "canonical" string, then CPython may need to perform a conversion. Similiarly to `utf8`, the `wstr` field of `PyASCIIObject` is used to store the cached `Py_UNICODE*` representation. 
 
 The old API allowed creating strings with a `NULL` buffer and filling the buffer afterwards. Today the strings created in this way are called "legacy" strings. They are represented by the `PyUnicodeObject` struct. Initially, they have only the `Py_UNICODE*` representation. The `wstr` field is used to hold it. The users of the API must call the [`PyUnicode_READY()`](https://docs.python.org/3/c-api/unicode.html#c.PyUnicode_READY) function on "legacy" strings to make them work with the new API. This function stores the canonical (USC-1, UCS-2 or UCS-4) representation of a string in the `data` field of `PyUnicodeObject`.
 
 The old API is still supported but deprecated. [PEP 623](https://www.python.org/dev/peps/pep-0623/) lays down a plan to remove it in Python 3.12.
+
+Perhaps the most interesting question about the flexible string representation is how to get it. Typically, a string is created by decoding a sequence of bytes using some encoding. This is how the parser creates strings from string literals. This is how contents of a file become strings. And this is what happens when we call the `decode()` method of a `bytes` object. In all of these cases Python uses the UTF-8 encoding by default, so let's take a look at the algorithm that decodes a UTF-8-encoded text to a Python string. It's not immediately obvious how to implement such an algorithm because CPython needs to choose an appropriate struct and encoding to represent the string (ASCII, UCS-1, UCS-2 or UCS-4), and it must decode all the code points to do that. One solution would be to read the input twice: the first time to determine the largest code point in the input and the second time to convert the input from the UTF-8 encoding to the choosen internal encoding. This is not what CPython does. It tries to be optimistic and initially creates an instance of `PyASCIIObject` to represent the string. If it encounters a non-ASCII character as it reads the input, it creates an instance of `PyCompactUnicodeObject`, chooses the next most compact encoding that is capable of representing the character and converts the already decoded prefix to the new encoding. This way, it reads the input once but may change the internal representation up to three times. The algorithm is implemented in the `unicode_decode_utf8()` function in [`Objects/unicodeobject.c`](https://github.com/python/cpython/blob/3.9/Objects/unicodeobject.c).
+
+There is a lot more to say about Python strings. The implementation of string methods, such as `str.find()` and `str.join()`, is an interesting topic, but it probably deserves a separate port. Another topic worth discussing is [string interning](https://en.wikipedia.org/wiki/String_interning). We'll cover it when we take a look at how Python dictionaries work. This post focuses on how CPython implements strings and it won't be complete if we don't discuss alternative ways to implement strings in a programming language, so that's what we'll do now.
+
+## How other Python implementations represent strings
+
+The flexible string representation is quite complex, so you might wonder whether other Python  implementations, such as PyPy and MicroPython, use it. The short answer is: they don't. In fact, I'm not aware of any other language, not to say about Python implementation, that takes CPython's approach.
+
+MicroPython uses UTF-8 for the string representation. Strings are true Unicode strings just like in CPython. Code point indexing is supported but [implemented](https://github.com/micropython/micropython/blob/eee1e8841a852f374b83e0a3e3b0ff7b66e54243/py/objstrunicode.c#L150) by scanning the string, so it takes $O(n)$ time to access the nth code point.
+
+PyPy uses UTF-8 too. But it does code point indexing in constant time. The trick is simple. Think about a UTF-8 representation as a sequence of blocks, each block (with the possible exception of the last) containing 64 code points. Create an array of integers such that ith element of the array is a starting byte position of the ith block. Then the nth code point of a string can be found as follows:
+
+```python
+def get_code_point(buffer, n):
+    block_num, code_point_in_block = divmod(n, 64)
+    block_start_byte = block_index[block_num]
+    return seek_forward(buffer[block_start_byte:], code_point_in_block)
+```
+
+[This message](https://mail.python.org/pipermail/pypy-dev/2016-March/014277.html) on the pypy-dev mailing list explains the algorithm in more detail.
+
+## How other languages implement strings
+
+
 
