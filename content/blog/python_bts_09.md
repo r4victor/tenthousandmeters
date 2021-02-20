@@ -123,7 +123,7 @@ $ python2.7
 ✅
 ```
 
-Though byte strings were sequences of bytes, they were called strings for a reason. The reason is that Python provided string methods for byte strings, such as `str.split()` and `str.upper()`. Think about what the `str.upper()` method should do on a sequence of bytes. It doesn't make sense to take a byte and convert it to an uppercase variant because bytes don't have case. It starts make sense if we assume that the sequence of bytes is a text in some encoding. That's exactly what Python did. The assumed encoding depended on a [locale](https://en.wikipedia.org/wiki/Locale_(computer_software)). Typically, it was ASCII. We could change the locale, so that string methods started to work on non-ASCII encoded text:
+Though byte strings were sequences of bytes, they were called strings for a reason. The reason is that Python provided string methods for byte strings, such as `str.split()` and `str.upper()`. Think about what the `str.upper()` method should do on a sequence of bytes. It doesn't make sense to take a byte and convert it to an uppercase variant because bytes don't have case. It starts make sense if we assume that the sequence of bytes is a text in some encoding. That's exactly what Python did. The assumed encoding depended on the [locale](https://en.wikipedia.org/wiki/Locale_(computer_software)). Typically, it was ASCII. We could change the locale, so that string methods started to work on non-ASCII encoded text:
 
 ```pycon
 $ python2.7
@@ -272,7 +272,11 @@ def get_code_point(buffer, n):
 
 [This message](https://mail.python.org/pipermail/pypy-dev/2016-March/014277.html) on the pypy-dev mailing list explains the algorithm in more detail.
 
-## How other languages implement strings
+MicroPython and PyPy have to implement the same strings that CPython implements in order to stay compatible with it. But other languages have different views on what a string shoud be in the first place. The next section describes a spectrum of those views.
 
+## How strings work in other languages
 
+The most primitive form of a string data type is an array of bytes. Python 2 strings are an example of this approach. It comes from C where strings are represented as arrays of `char`. The C standard library provides a [set of functions](https://en.wikipedia.org/wiki/C_character_classification) like `toupper()` and `isspace()` that take bytes and treat them as characters in the encoding specified by the current locale. This allows working with encodings that use one byte per character. To support other encodings, the `wchar_t` type was introduced in the C90 standard. Unlike `char`, `wchar_t` is guaranteed to be large enough to represent all characters in any encoding specified by any supported locale. For example, if some locale specifies the UTF-8 encoding, then `wchar_t` must large enough to represent all Unicode code points. The problem with `wchar_t` is that it is platform-dependent and its width can be as small as 8 bits.  The C11 standard addressed this problem and introduced the `char16_t` and `char32_t ` types that can be used to represent code units of UTF-16 and UTF-32 respectively in a platform-independent way. [Chapter 5](https://www.unicode.org/versions/Unicode13.0.0/ch05.pdf) of the Unicode Standard discusses Unicode data types in C in more detail.
+
+In Go, a string is a read-only [slice](https://blog.golang.org/slices) of bytes, i.e. an array of bytes along with the number of bytes in the array. A string may hold arbitrary bytes just like an array of `char` in C, and indexing a string returns a byte. Nevertheless, Go provides decent Unicode support. First, Go source code is always UTF-8. This means that string literals are  valid UTF-8 sequences. Second, iterating over a string with the `for` loop yields Unicode code points. There is a separte type to represent code points – the `rune` type. Third, the standard library provides functions to work with Unicode. For example, we can use the [`ValidString() `](https://golang.org/pkg/unicode/utf8/#ValidString) function provided by the [`unicode/utf8`](https://golang.org/pkg/unicode/utf8/) package to check whether a given string is a valid UTF-8 sequence. To learn more about strings in Go, check out [this excellent article](https://blog.golang.org/strings) written by Rob Pike.
 
