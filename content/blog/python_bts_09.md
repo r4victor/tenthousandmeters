@@ -154,7 +154,7 @@ u'\u0438'
 ПИТОН
 ```
 
-Python used the UCS-2 encoding to represent Unicode strings internally. UCS-2 was capable of encoding all the code points that were assigned at that moment. But then Unicode assigned first code points outside the Basic Multilingual Plane, and UCS-2 could no longer encode all the code points. Python switched from UCS-2 to UTF-16. Now any code point outside the Basic Multilingual Plane could be represented by a surrogate pair. This caused another problem. Since UTF-16 is a variable-width encoding, getting the nth code point of a string requires scanning the string until that code point is found. Python had string indexing in constant time and didn't want to lose that. So, what happend is that Unicode objects siezed to be true Unicode strings and became sequence of code units. This had the following consequences:
+Python used the UCS-2 encoding to represent Unicode strings internally. UCS-2 was capable of encoding all the code points that were assigned at that moment. But then Unicode assigned first code points outside the Basic Multilingual Plane, and UCS-2 could no longer encode all the code points. Python switched from UCS-2 to UTF-16. Now any code point outside the Basic Multilingual Plane could be represented by a surrogate pair. This caused another problem. Since UTF-16 is a variable-width encoding, getting the nth code point of a string requires scanning the string until that code point is found. Python supported indexing into a string in constant time and didn't want to lose that. So, what happend is that Unicode objects siezed to be true Unicode strings and became sequence of code units. This had the following consequences:
 
 ```pycon
 $ python2.7
@@ -276,7 +276,60 @@ MicroPython and PyPy have to implement the same strings that CPython implements 
 
 ## How strings work in other languages
 
+### C
+
 The most primitive form of a string data type is an array of bytes. Python 2 strings are an example of this approach. It comes from C where strings are represented as arrays of `char`. The C standard library provides a [set of functions](https://en.wikipedia.org/wiki/C_character_classification) like `toupper()` and `isspace()` that take bytes and treat them as characters in the encoding specified by the current locale. This allows working with encodings that use one byte per character. To support other encodings, the `wchar_t` type was introduced in the C90 standard. Unlike `char`, `wchar_t` is guaranteed to be large enough to represent all characters in any encoding specified by any supported locale. For example, if some locale specifies the UTF-8 encoding, then `wchar_t` must large enough to represent all Unicode code points. The problem with `wchar_t` is that it is platform-dependent and its width can be as small as 8 bits.  The C11 standard addressed this problem and introduced the `char16_t` and `char32_t ` types that can be used to represent code units of UTF-16 and UTF-32 respectively in a platform-independent way. [Chapter 5](https://www.unicode.org/versions/Unicode13.0.0/ch05.pdf) of the Unicode Standard discusses Unicode data types in C in more detail.
 
-In Go, a string is a read-only [slice](https://blog.golang.org/slices) of bytes, i.e. an array of bytes along with the number of bytes in the array. A string may hold arbitrary bytes just like an array of `char` in C, and indexing a string returns a byte. Nevertheless, Go provides decent Unicode support. First, Go source code is always UTF-8. This means that string literals are  valid UTF-8 sequences. Second, iterating over a string with the `for` loop yields Unicode code points. There is a separte type to represent code points – the `rune` type. Third, the standard library provides functions to work with Unicode. For example, we can use the [`ValidString() `](https://golang.org/pkg/unicode/utf8/#ValidString) function provided by the [`unicode/utf8`](https://golang.org/pkg/unicode/utf8/) package to check whether a given string is a valid UTF-8 sequence. To learn more about strings in Go, check out [this excellent article](https://blog.golang.org/strings) written by Rob Pike.
+### Go
+
+In Go, a string is a read-only [slice](https://blog.golang.org/slices) of bytes, i.e. an array of bytes along with the number of bytes in the array. A string may hold arbitrary bytes just like an array of `char` in C, and indexing into a string returns a byte. Nevertheless, Go provides decent Unicode support. First, Go source code is always UTF-8. This means that string literals are  valid UTF-8 sequences. Second, iterating over a string with the `for` loop yields Unicode code points. There is a separte type to represent code points – the `rune` type. Third, the standard library provides functions to work with Unicode. For example, we can use the [`ValidString() `](https://golang.org/pkg/unicode/utf8/#ValidString) function provided by the [`unicode/utf8`](https://golang.org/pkg/unicode/utf8/) package to check whether a given string is a valid UTF-8 sequence. To learn more about strings in Go, check out [this excellent article](https://blog.golang.org/strings) written by Rob Pike.
+
+### Rust
+
+Rust provides several string types. The main string type, called [`str`](https://doc.rust-lang.org/std/primitive.str.html), is used to represent UTF-8-encoded text. A string is a slice of bytes that cannot hold arbitrary bytes but only a valid UTF-8 sequence. Attempt to create a string from a sequence of bytes that is not a valid UTF-8 sequence is an error. Indexing into a string by an integer is not supported. The docs [give](https://doc.rust-lang.org/std/string/struct.String.html#utf-8) the reasoning for that:
+
+> Indexing is intended to be a constant-time operation, but UTF-8 encoding does not allow us to do this. Furthermore, it's not clear what sort of thing the index should return: a byte, a codepoint, or a grapheme cluster. The [`bytes`](https://doc.rust-lang.org/std/primitive.str.html#method.bytes) and [`chars`](https://doc.rust-lang.org/std/primitive.str.html#method.chars) methods return iterators over the first two, respectively.
+
+The iteration is the way to access code points. Nevertheless, it's possible to index into a string by a range, like `&string[0..4]`. This operation returns a substring consisting of bytes in the specifed range. If the substring is not a valid UTF-8 sequence, the program will crash. It's always possible to access individual bytes of a string by converting it to a byte slice first. To learn more about strings in Rust,  check out [the docs](https://doc.rust-lang.org/std/primitive.str.html#method.get) and [Chapter 8](https://doc.rust-lang.org/book/ch08-02-strings.html#storing-utf-8-encoded-text-with-strings) of the Rust Programming Language book.
+
+### Swift
+
+Swift takes the most radical approach when it comes to Unicode support. A string in Swift is a sequence of Unicode grapheme clusters, that is, a sequence of human-perceived characters. The `count` property returns the number of grapheme clusters:
+
+```swift
+let str = "\u{65}\u{301}"
+print(str)
+print(str.count)
+
+// Output:
+// é
+// 1
+```
+
+And iterating over a string yields grapheme clusters:
+
+```swift
+let str = "Cluster:\u{1112}\u{1161}\u{11AB} "
+for c in str {
+    print(c, terminator:" ")
+}
+
+// Output:
+// C l u s t e r : 한
+```
+
+Internally, a string is stored in the UTF-8 encoding. Indexing into a string by an integer is not supported. There is an API, though, that allows accessing grapheme clusters by indices:
+
+```swift
+let str = "Swift";
+let c = str[str.index(str.startIndex, offsetBy: 3)]
+print(c)
+
+// Output:
+// f
+```
+
+It looks intentionally clumsy to remind programmers about the expensiveness of the operation. Check out the [Language Guide](https://docs.swift.org/swift-book/LanguageGuide/StringsAndCharacters.html) to learn more about strings in Swift.
+
+## Conclusion
 
