@@ -583,7 +583,7 @@ The range [-5, 256] is chosen because the values in this range are extensively u
 
 ## Conclusion
 
-The design of built-in types has certainly contributed to the Python's success. Python integers serve as an example of a quite efficient and, at the same time, accessible bignum implementation. We made use of this fact today to learn both about Python integers and about bignums. Next time we'll continue to study Python built-in types. Stay tuned to learn about how Python strings work.
+The design of built-in types has certainly contributed to the Python's success. Python integers serve as an example of a quite efficient and, at the same time, accessible bignum implementation. We made use of this fact today to learn both about Python integers and about bignums. Next time we'll continue to study Python built-in types. Stay tuned to learn about [how Python strings work]({filename}/blog/python_bts_09.md).
 
 <br>
 
