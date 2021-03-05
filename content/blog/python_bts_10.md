@@ -20,13 +20,13 @@ In its essence, a hash table is an array. A nice fact about arrays is that we ca
 
 An array index specifies a position in the array. In the hash table terminology an individual array position is called a **bucket**. The function that maps keys to buckets is called a **hash function**. We now show one simple way to construct it.
 
-To hash integer keys, we use the hash function of the form `h(key) = key % number_of_buckets`.  It gives the values in the range `[0, number_of_buckets - 1]`. And this is exactly what we need! To hash other data types we first convert them to integers. For example, we can convert a string to an integer if we interpret the characters of the string as digits in a certain base. Then the integer value of the string of length $n$ can be calculated as follows:
+To hash integer keys, we use a hash function of the form `h(key) = key % number_of_buckets`. It gives the values in the range `[0, number_of_buckets - 1]`. And this is exactly what we need! To hash other data types we first convert them to integers. For example, we can convert a string to an integer if we interpret the characters of the string as digits in a certain base. Then the integer value of the string of length $n$ can be calculated as follows:
 
 $$str\_to\_int(s) = s[0] \times base ^{n-1} + s[1] \times base ^{n-2} + \cdots + s[n-1]$$
 
 where $base$ is the size of the alphabet.
 
-With this approach, different keys can map to the same bucket. In fact, if the number of possible keys is larger than the number of buckets, then some key will always map to the same bucket no matter what hash function we choose. So, we have to find a way to handle hash collisions. One popular method to do that is called **chaining**. The idea of chaining is to associate an additional data structure with each bucket and to store all the items that hash to the same bucket in that data structure. Linked lists are typically used for chaining. The following picture summarizes what a hash table with chaining looks like:
+With this approach, different keys can map to the same bucket. In fact, if the number of possible keys is larger than the number of buckets, then some key will always map to the same bucket no matter what hash function we choose. So, we have to find a way to handle hash collisions. One popular method to do that is called **chaining**. The idea of chaining is to associate an additional data structure with each bucket and to store all the items that hash to the same bucket in that data structure. The following picture shows a hash table that uses linked lists for chaining:
 
 <br>
 
@@ -34,9 +34,13 @@ With this approach, different keys can map to the same bucket. In fact, if the n
 
 <br>
 
-Let's restrict for a moment the set of possible keys to a relatively small range of non-negative integers, say [0, 999]. We can then implement the dictionary using an array of size 1000. We just use keys as indices to the array, so that the i-th element of the array holds the value of the key i. Obviously, the insert, lookup and delete operations take constant time.
+To insert a (key, value) pair in such a table, we hash the key and search for it in the corresponding linked list. If we find the key, we update the value. If we don't find the key, we add a new entry to the list. The lookup and delete operations are done in a similar manner.
 
-The shortcoming of this implementation is that it supports very limited set of keys. Arbitrary-precision integers, strings, tuples and other data types that we may need to use as keys are not supported. How can we fix it? Suppose we could devise a function that would map every possible key, be it an integer, a string or a something else, to an index of the array. Then we could store the value of a key under the corresponding index.
+We now have a working hash table. How well does it perform? The worst-case analysis is quite simple. If the set of possible keys is sufficiently large, then there is a non-zero chance that all the items we add to the hash table will happen to be in the same bucket. The average-case performance is more promising. It largely depends on two factors. First, it depends on how evenly the hash function distributes the keys among buckets. Second, it depends on the average number of items per bucket. This latter characteristic of a hash table is called a **load factor**:
+
+$$load\_factor = \frac{number\_of\_items}{number\_of\_buckets}$$
+
+Theory says that if a key is equally likely to hash to any bucket and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is constant.
 
 ## Designing a real-world hash table
 
