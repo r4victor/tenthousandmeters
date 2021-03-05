@@ -16,7 +16,23 @@ A hash table is a data structure that is commonly used to implement dictionaries
 
 ## Designing a simple hash table
 
-In its essence, a hash table is an array. A nice fact about arrays is that we can access the i-th element of an array in constant time. The main idea behind a hash table is to map each possible key to an array index, so that the index can be used to quickly locate the value of the key. We'll now show how to build such a mapping.
+In its essence, a hash table is an array. A nice fact about arrays is that we can access the i-th element of an array in constant time. The main idea behind a hash table is to map each possible key to an array index, so that the index can be used to quickly locate the value of the key. 
+
+An array index specifies a position in the array. In the hash table terminology an individual array position is called a **bucket**. The function that maps keys to buckets is called a **hash function**. We now show one simple way to construct it.
+
+To hash integer keys, we use the hash function of the form `h(key) = key % number_of_buckets`.  It gives the values in the range `[0, number_of_buckets - 1]`. And this is exactly what we need! To hash other data types we first convert them to integers. For example, we can convert a string to an integer if we interpret the characters of the string as digits in a certain base. Then the integer value of the string of length $n$ can be calculated as follows:
+
+$$str\_to\_int(s) = s[0] \times base ^{n-1} + s[1] \times base ^{n-2} + \cdots + s[n-1]$$
+
+where $base$ is the size of the alphabet.
+
+With this approach, different keys can map to the same bucket. In fact, if the number of possible keys is larger than the number of buckets, then some key will always map to the same bucket no matter what hash function we choose. So, we have to find a way to handle hash collisions. One popular method to do that is called **chaining**. The idea of chaining is to associate an additional data structure with each bucket and to store all the items that hash to the same bucket in that data structure. Linked lists are typically used for chaining. The following picture summarizes what a hash table with chaining looks like:
+
+<br>
+
+<img src="{static}/blog/python_bts_10/hash_table_with_chaining.png" alt="hash_table_with_chaining" style="width:700px; display: block; margin: 0 auto;" />
+
+<br>
 
 Let's restrict for a moment the set of possible keys to a relatively small range of non-negative integers, say [0, 999]. We can then implement the dictionary using an array of size 1000. We just use keys as indices to the array, so that the i-th element of the array holds the value of the key i. Obviously, the insert, lookup and delete operations take constant time.
 
