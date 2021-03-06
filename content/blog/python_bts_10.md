@@ -6,7 +6,7 @@ Python dictionaries are an extremely important part of Python. Of course they ar
 
 ## What is a dictionary
 
-Let us first clarify that a dictionary and a hash table are not the same thing. A **dictionary** (also known as a map or associative array) is an interface that maintains a collection of (key, value) pairs and supports at least three operations:
+Let us first clarify that a dictionary and a hash table are not the same thing. A dictionary (also known as a map or associative array) is an interface that maintains a collection of (key, value) pairs and supports at least three operations:
 
 * Insert a (key, value) pair: `d[key] = value`.
 * Lookup the value for a given key: `d[key]`.
@@ -26,7 +26,7 @@ $$str\_to\_int(s) = s[0] \times base ^{n-1} + s[1] \times base ^{n-2} + \cdots +
 
 where $base$ is the size of the alphabet.
 
-With this approach, different keys can map to the same bucket. In fact, if the number of possible keys is larger than the number of buckets, then some key will always map to the same bucket no matter what hash function we choose. So, we have to find a way to handle hash collisions. One popular method to do that is called **chaining**. The idea of chaining is to associate an additional data structure with each bucket and to store all the items that hash to the same bucket in that data structure. The following picture shows a hash table that uses linked lists for chaining:
+With this approach, different keys may map to the same bucket. In fact, if the number of possible keys is larger than the number of buckets, then some key will always map to the same bucket no matter what hash function we choose. So, we have to find a way to handle hash collisions. One popular method to do that is called **chaining**. The idea of chaining is to associate an additional data structure with each bucket and to store all the items that hash to the same bucket in that data structure. The following picture shows a hash table that uses linked lists for chaining:
 
 <br>
 
@@ -34,13 +34,17 @@ With this approach, different keys can map to the same bucket. In fact, if the n
 
 <br>
 
-To insert a (key, value) pair in such a table, we hash the key and search for it in the corresponding linked list. If we find the key, we update the value. If we don't find the key, we add a new entry to the list. The lookup and delete operations are done in a similar manner.
+To insert a (key, value) pair into such a table, we hash the key and search for it in the corresponding linked list. If we find the key, we update the value. If we don't find the key, we add a new entry to the list. The lookup and delete operations are done in a similar manner.
 
 We now have a working hash table. How well does it perform? The worst-case analysis is quite simple. If the set of possible keys is sufficiently large, then there is a non-zero chance that all the items we add to the hash table will happen to be in the same bucket. The average-case performance is more promising. It largely depends on two factors. First, it depends on how evenly the hash function distributes the keys among buckets. Second, it depends on the average number of items per bucket. This latter characteristic of a hash table is called a **load factor**:
 
 $$load\_factor = \frac{number\_of\_items}{number\_of\_buckets}$$
 
 Theory says that if a key is equally likely to hash to any bucket and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is constant.
+
+The load factor requirement is easy to satisfy. We just double the size of the hash table when the load factor exceeds some predefined limit. Let this limit be 2. Then if, upon insertion, the load factor becomes more than 2, we allocate a new hash table that has twice as many buckets as the current one and reinsert all the items into the new hash table. This way, no matter how many items we insert into the hash table, the load factor is always kept between 1 and 2. The cost of resizing the hash table is proportional to the number of items in it, so inserts that trigger resizing are expensive. Nevertheless, such inserts are rare, because the size of the hash table grows in the geometric progression. The expected time of a single insert remains constant.
+
+The other requirement says that the probability of a key being mapped to a bucket must be the same for all buckets and equal to `1/number_of_buckets`. So, we would like to have a hash function that distributes the keys uniformly among buckets. The problem with this is that the probability distribution of hashes is affected by the probability distribution of keys. For example, if the keys are uniformly distributed, then the hash function `h(key) = key % number_of_buckets` will give uniform distribution of hashes. But suppose that the keys are limited to even integers. Then, if the number of buckets is even, the same hash function will never map a key to an odd bucket. At least half of buckets won't be used.
 
 ## Designing a real-world hash table
 
