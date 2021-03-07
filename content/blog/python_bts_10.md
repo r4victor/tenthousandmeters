@@ -44,7 +44,30 @@ Theory says that if a key is equally likely to hash to any bucket and if the loa
 
 The load factor requirement is easy to satisfy. We just double the size of the hash table when the load factor exceeds some predefined limit. Let this limit be 2. Then if, upon insertion, the load factor becomes more than 2, we allocate a new hash table that has twice as many buckets as the current one and reinsert all the items into the new hash table. This way, no matter how many items we insert into the hash table, the load factor is always kept between 1 and 2. The cost of resizing the hash table is proportional to the number of items in it, so inserts that trigger resizing are expensive. Nevertheless, such inserts are rare, because the size of the hash table grows in the geometric progression. The expected time of a single insert remains constant.
 
-The other requirement says that the probability of a key being mapped to a bucket must be the same for all buckets and equal to `1/number_of_buckets`. So, we would like to have a hash function that distributes the keys uniformly among buckets. The problem with this is that the probability distribution of hashes is affected by the probability distribution of keys. For example, if the keys are uniformly distributed, then the hash function `h(key) = key % number_of_buckets` will give uniform distribution of hashes. But suppose that the keys are limited to even integers. Then, if the number of buckets is even, the same hash function will never map a key to an odd bucket. At least half of buckets won't be used.
+The other requirement says that the probability of a key being mapped to a bucket must be the same for all buckets and equal to `1/number_of_buckets`. So, we would like to have a hash function that distributes the keys uniformly among buckets. The problem with this is that the probability distribution of hashes is affected by the probability distribution of keys. For example, if the keys are uniformly distributed, then the hash function `h(key) = key % number_of_buckets` will give uniform distribution of hashes. But suppose that the keys are limited to even integers. Then, if the number of buckets is even, the same hash function will never map a key to an odd bucket. At least half of buckets won't be used. So, what hash function should we choose? This is the topic of the next section.
 
-## Designing a real-world hash table
+## Hash functions
+
+If we cannot predict what the keys in every possible application will be, then we need to choose a hash function that is expected to uniformly distribute any set of keys. The way to do this is to generate the hash function randomly. That is, with equal probability, we assign a random hash to each possible key. Note that the hash function itself must be deterministic. Only the generation step is random.
+
+A randomly generated hash function is the best hash function. Unfortunately, it's impractical. The only way to represent such a function in a program is to store it explicitly as a table of (key, hash) pairs, like so:
+
+| key    | 0    | 1    | 2    | 3    | 4    | 5    | 6    | 7    | ...  |
+| ------ | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| h(key) | 43   | 521  | 883  | 118  | 302  | 91   | 339  | 16   | ...  |
+
+And this requires too much memory.
+
+The best thing we can do in practice is to choose a hash function that in some sense approximates a randomly generated hash function. Fortunately, there has been developed a number of methods to do that. These methods fit within the same general framework because all real-world hash tables use hash functions that work in two steps:
+
+1. Map a key to a fixed-size integer, e.g. 32-bit or 64-bit int.
+2. Map a fixed-size integer to a hash table bucket.
+
+The first step is specific for each data type and doesn't change with the size of the hash table.The second step is the same for all keys and changes when the size of the hash table changes. Thus, a hash function is a composition of two other functions: `h(key) = f(g(key))`. This may seem confusing but the function that performs the first step is also referred to as a hash function because, generally speaking, the term "hash function" applies to any function that maps data of arbitrary size to fixed-size values. To avoid further confusion, we give each function a proper name: `key_to_bucket(key) = hash_to_bucket(hash(key))`.
+
+Typically, the `hash_to_bucket()` function is just  `hash % number_of_buckets`, so that the `key_to_bucket()` function takes the form `key_to_bucket(key) = hash(key) % number_of_buckets`. This approach assumes that it's a responsibility of the `hash()` function to produce uniformly distributed values. But not all hash table designers construct the `hash()` function with this assumption in mind. What they do instead is shift some of the responsibility to produce uniformly distributed values to the `hash_to_bucket()` function. For example, you may read advice to always set the size of a hash table to a prime number, so that `hash_to_bucket(hash) = hash % prime_number`. The reasoning is that a prime number is more likely to break patterns in the input data. Composite numbers are considered to be a bad choice because of the following identity:
+
+$$ka\;\%\;kn = k (a \;\% \;n)$$
+
+
 
