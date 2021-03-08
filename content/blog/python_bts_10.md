@@ -109,3 +109,30 @@ static final int hash(Object key) {
 
 No tricks are needed if we choose a proper hash function in the first place. As we've already said, there exists a number of methods to do that. Let us now see what they are.
 
+### Non-cryptographic hash functions
+
+The first method is to choose a well-known non-cryptographic hash function that was designed to work well in practice. The list of such functions includes [Jenkins hash](https://en.wikipedia.org/wiki/Jenkins_hash_function), [FNV hash](https://en.wikipedia.org/wiki/Jenkins_hash_function), [MurmurHash](https://en.wikipedia.org/wiki/MurmurHash), [CityHash](https://github.com/google/cityhash), [xxHash](https://github.com/Cyan4973/xxHash) and [many others](https://en.wikipedia.org/wiki/List_of_hash_functions#Non-cryptographic_hash_functions). These functions take byte sequences as their inputs, so they can be used to hash all kinds of data. To get a rough idea of how they work, let's take a look at the [FNV-1a hash](https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function). Here's what its Python implementation may look like:
+
+```python
+OFFSET_BASIS = 2166136261
+FNV_PRIME = 16777619
+HASH_SIZE = 2 ** 32
+
+
+def fvn1a(data: bytes) -> int:
+    h = OFFSET_BASIS
+    for byte in data:
+        h = h ^ byte
+        h = (h * FNV_PRIME) % HASH_SIZE
+    return h
+```
+
+For each byte in the input, the function performs two steps:
+
+* combines the byte with the current hash value (xor); and
+* mixes the current hash value (multiply).
+
+All hash functions have this structure. To get an idea of why they work that way and why they use particular operations and constants, check out Bret Mulveyʼs [excellent article on hash functions](https://papa.bretmulvey.com/post/124027987928/hash-functions). Bret also explains how to evaluate the quality of a hash function, so we won't discuss it here. Some very interesting results can be found in [this answer](https://softwareengineering.stackexchange.com/questions/49550/which-hashing-algorithm-is-best-for-uniqueness-and-speed) on StackExchange. Check them out!
+
+
+
