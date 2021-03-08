@@ -58,26 +58,31 @@ A randomly generated hash function is the best hash function. Unfortunately, it'
 
 And this requires too much memory.
 
-The best thing we can do in practice is to choose a hash function that in some sense approximates a randomly generated hash function. Fortunately, there has been developed a number of methods to do that. These methods fit within the same general framework because all real-world hash tables use hash functions that work in two steps:
+The best thing we can do in practice is to choose a hash function that in some sense approximates a randomly generated hash function. Fortunately, there has been developed a number of methods to do that. Before we delve into them, note that there is no need to choose a separate hash function for each possible hash table size. What real-world hash table implementations do instead is introduce an auxiliary hash function that maps keys to fixed-size integers, such as 32-bit or 64-bit ints, and another function that maps these integers to hash table buckets. Only the latter function changes when the size of the hash table changes. Typically, it's just the modulo operation, so that the bucket for a given key is calculated as follows:
 
-1. Map a key to a fixed-size integer, e.g. 32-bit or 64-bit int.
-2. Map a fixed-size integer to a hash table bucket.
+```text
+hash(key) % number_of_buckets
+```
 
-The first step is specific for each data type and doesn't change with the size of the hash table. The second step is the same for all keys and changes when the size of the hash table changes. Thus, a hash function is a composition of two other functions: `h(key) = f(g(key))`. This may seem confusing but the function that performs the first step is also referred to as a hash function because, generally speaking, the term "hash function" applies to any function that maps data of arbitrary size to fixed-size values. To avoid further confusion, we give each function a proper name: `key_to_bucket(key) = hash_to_bucket(hash(key))`.
+Most implementations use powers of 2 as the hash table size because in this case the modulo operation can be computed very efficiently. To compute `hash(key) % (2 ** m)`, we just take `m` lower bits of `hash(key)`: 
 
-Typically, the `hash_to_bucket()` function is just  `hash % number_of_buckets`, so that the `key_to_bucket()` function takes the form `key_to_bucket(key) = hash(key) % number_of_buckets`. This approach assumes that it's a responsibility of the `hash()` function to produce uniformly distributed values. But not all hash table designers construct the `hash()` function with this assumption in mind. What they do instead is shift some of the responsibility of producing uniformly distributed values to the `hash_to_bucket()` function. For example, you may read advice to always set the size of a hash table to a prime number, so that `hash_to_bucket(hash) = hash % prime_number`. Composite numbers are considered to be a bad choice because of the following identity:
+```text
+hash(key) & (2 ** m - 1)
+```
+
+This approach requires that the `hash()` function produces uniformly distributed hashes. When the `hash()` function is not designed with this requirement in mind, hash table designers resort to certain tricks. A common advice is to use prime number as the hash table size, so that the bucket for a given key is calculated as follows:
+
+```text
+hash(key) % prime_number
+```
+
+Composite numbers are considered to be a bad choice because of the following identity:
 
 $$ka\;\%\;kn = k (a \;\% \;n)$$
 
 It means that if a key shares a common factor with the number of buckets, then the key will be mapped to a bucket that is a multiple of this factor. So, the buckets will be filled disproportionately if such keys dominate. Prime numbers are recommended because they are more likely to break patterns in the input data.
 
-Many hash table implementations always set the size of a hash table to a power of 2 because in this case the modulo operation can be computed very efficiently. To compute `hash % (2 ** m)`, we just take `m` lower bits of `hash`: 
-
-```text
-hash & (2 ** m - 1)
-```
-
-This approach may cause a lot of hash collisions when the `hash()` function produces hashes that differ mainly in higher bits. To remedy this problem, an additional step is added to scramble the bits of a hash. You may find such a trick in the [Java HashMap](https://github.com/openjdk/jdk/blob/742d35e08a212d2980bc3e4eec6bc526e65f125e/src/java.base/share/classes/java/util/HashMap.java):
+Another trick is to use powers of 2 as the hash table size but scramble the bits of a hash before taking the modulus. You may find such a trick in the [Java HashMap](https://github.com/openjdk/jdk/blob/742d35e08a212d2980bc3e4eec6bc526e65f125e/src/java.base/share/classes/java/util/HashMap.java):
 
 ```Java
 /**
@@ -101,4 +106,6 @@ static final int hash(Object key) {
     return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
 }
 ```
+
+No tricks are needed if we choose a proper hash function in the first place. As we've already said, there exists a number of methods to do that. Let us now see what they are.
 
