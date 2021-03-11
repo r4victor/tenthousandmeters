@@ -129,8 +129,8 @@ def fvn1a(data: bytes) -> int:
 
 For each byte in the input, the function performs two steps:
 
-* combines the byte with the current hash value (xor); and
-* mixes the current hash value (multiplication).
+1. combines the byte with the current hash value (xor); and
+2. mixes the current hash value (multiplication).
 
 All hash functions have this structure. To get an idea of why they work that way and why they use particular operations and constants, check out Bret Mulveyʼs [excellent article on hash functions](https://papa.bretmulvey.com/post/124027987928/hash-functions). Bret also explains how to evaluate the quality of a hash function, so we won't discuss it here. Some very interesting results can be found in [this answer](https://softwareengineering.stackexchange.com/questions/49550/which-hashing-algorithm-is-best-for-uniqueness-and-speed) on StackExchange. Check them out too!
 
@@ -144,6 +144,12 @@ $$ \forall x \ne y \in Keys\;\; \underset{h\in F}\Pr[h(x) = h(y)] \le \frac{1}{n
 
 It means that an average function from a universal family is unlikely to produce colliding hashes for two distinct keys.
 
+Just to get an idea of what a universal family may look like, here's a classic example of a universal family that can be used to hash integer keys:
+
+$$h_{a, b}(x) = ((ax + b)\;\%\;p)\;\%\;number\_of\_buckets$$
+
+where $p$ is any fixed prime number at least as large as the number of possible keys, and $a \in \{1, ...p-1\}$ and $b \in \{0, ...p-1\}$ are parameters choosen at random that specify a concrete hash function from the family.
+
 What does universality give us? Suppose that we randomly choose a hash function from a universal family and use this hash function to insert a sequence of keys into a hash table with chaining and table resizing as described in the previous section. Then theory says that the expected length of each chain in the hash table is bounded by a constant. This implies that the expected time of a single insert, lookup and delete operation is constant.
 
 Note that we've made a similiar statement before:
@@ -151,4 +157,27 @@ Note that we've made a similiar statement before:
 > Theory says that if a key is equally likely to hash to any bucket and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is constant.
 
 The important difference is that in the case of universal hashing the word "expected"  means averaging over hash functions, while the other statement refers to averaging over the keys.
+
+To learn more about the theory behind universal hashing, read [the paper](https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf) by Lawrence Carter and Mark Wegman that indroduced this concept. For examples of most efficient universal families known today, see [Mikkel Thorup's survey](https://arxiv.org/abs/1504.06804).
+
+Universal hashing looks good in theory because it guarantees excellent average-case performance and protects against hash flooding. Nevertheless, you won't find many hash table implementations that actually use it. The reason is a combination of two facts:
+
+* Universal hash functions are not as fast as the fastest non-cryptographic hash functions that work well in practice.
+* Universal hash functions do not protect against advanced types of hash flooding.
+
+What does the latter point mean? It is true that if a universal hash function is used, attackers cannot come up with a sequence of colliding keys beforehand. But if the attackers can observe how the hash function maps keys, they might be able to deduce how it works and come up with such a sequence. This situation is possible when users can work with the hash table interactively: insert a key, then lookup a key, then insert a key again and so on. To learn how the hash function maps keys, the attackers may perform a timing attack. First, they insert a single key into the hash table. Then, they try to lookup some other key that maps to the same bucket. When some key maps to the same bucket, the lookup takes more time because the hash table must compare the keys, so such a key is possible to detect. This is one way in which the information about the hash function may leak. Once it leaks, universal hashing doesn't give us any guarantees.
+
+The described attack is known as **advanced hash flooding**. It was identified by Jean-Philippe Aumasson and Daniel J. Bernstein in 2012. At that time, most hash table implementations used non-cryptographic hash functions. Some of those hash functions employed an idea of universal hashing and took a randomly generated seed. Stiil, they [were vulnerable](http://emboss.github.io/blog/2012/12/14/breaking-murmur-hash-flooding-dos-reloaded/) to hash flooding. Aumasson and Bernstein pointed out this problem and argued that because of advanced hash flooding, even true universal hashing couldn't be a solution. Fortunately, they developed a keyed hash function called [SipHash](https://en.wikipedia.org/wiki/SipHash) that became the solution.
+
+### SipHash
+
+SipHash takes a 128-bit secret key and a variable-length input and produces 64-bit hash. Unlike non-cryptographic hash functions, SipHash is designed to have certain cryptographic properties. Specifically, it's designed to work as a [message authentication code](https://en.wikipedia.org/wiki/Message_authentication_code) (MAC). MACs guarantee that it is not feasible to compute the hash of a given input without knowing the secret key even when the hash of any other input is at hand. Thus, if the secret key is randomly generated and unknown to attackers, SipHash protects against advanced hash flooding.
+
+Note that no hash function including SipHash can prevent the attackers from finding the colliding keys by bruteforce as we've seen in the example of a timing attack. This approach, however, requires $O(n^2)$ requests to find $n$ colliding keys, so the potential damage caused by the attack is significantly reduced.
+
+Note also that there is no formal proof of SipHash's security. Such proofs are beyond the state of the art of the modern cryptography. Nevertheless, some cryptanalysis and much evidence show that SipHash should work as a MAC indeed.
+
+SipHash is not as fast as some non-cryptographic hash functions, but its speed is comparable. The combination of speed and security made SipHash a safe bet for a general-purpose hash table. It's now used as a hash function in Python, Perl, Ruby, Rust, Swift and other languages.
+
+To learn more about SipHash, check out [the paper](http://cr.yp.to/siphash/siphash-20120918.pdf) by Aumasson and Bernstein.
 
