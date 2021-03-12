@@ -2,7 +2,7 @@ Title: Python behind the scenes #10: how Python dictionaries work
 Date: 2021-03-02 5:49
 Tags: Python behind the scenes, Python, CPython
 
-Python dictionaries are an extremely important part of Python. Of course they are imporant because programmers use them a lot, but that's not the only reason. Another reason is that CPython uses them internally to run Python code. We've seen that in previous parts. CPython does a dictionary lookup every time we access an object's attribute or a class variable, and accessing a global or built-in variable also involves a dictionary lookup if the result is not cached. What makes a dictionary appealing is that the lookup and insert operations are fast and that they remain fast even as we add more and more elements to the dictionary. You probably know why this is the case: Python dictionaries are hash tables. A hash table is a fundamental data structure. Its idea is simple and has been around for more that 50 years. Nevertheless, implementing a hash table that works well in practice is still a challenging task. We need to dive deep into the world of hash tables to understand how Python dictionaries really work. And that's what we're going to do today. We'll begin by designing a simple fully-functional hash table. Then we'll discuss what it takes to implement a hash table that works well in practice and see how CPython does that. As a bonus, we'll learn a few facts about Python dictionaries that will help us use them more efficiently.
+Python dictionaries are an extremely important part of Python. Of course they are imporant because programmers use them a lot, but that's not the only reason. Another reason is that CPython uses them internally to run Python code. CPython does a dictionary lookup every time we access an object's attribute or a class variable, and accessing a global or built-in variable also involves a dictionary lookup if the result is not cached. What makes a dictionary appealing is that the lookup and insert operations are fast and that they remain fast even as we add more and more elements to the dictionary. You probably know why this is the case: Python dictionaries are hash tables. A hash table is a fundamental data structure. Its idea is simple and has been around for more that 50 years. Nevertheless, implementing a hash table that works well in practice is still a challenging task. We need to dive deep into the world of hash tables to understand how Python dictionaries really work. And that's what we're going to do today. We'll begin by designing a simple fully-functional hash table. Then we'll discuss what it takes to implement a hash table that works well in practice and see how CPython does that. As a bonus, we'll learn a few facts about Python dictionaries that will help us use them more efficiently.
 
 ## What is a dictionary
 
@@ -177,7 +177,25 @@ Note that no hash function including SipHash can prevent the attackers from find
 
 Note also that there is no formal proof of SipHash's security. Such proofs are beyond the state of the art of the modern cryptography. Nevertheless, some cryptanalysis and much evidence show that SipHash should work as a MAC indeed.
 
-SipHash is not as fast as some non-cryptographic hash functions, but its speed is comparable. The combination of speed and security made SipHash a safe bet for a general-purpose hash table. It's now used as a hash function in Python, Perl, Ruby, Rust, Swift and other languages.
+SipHash is not as fast as some non-cryptographic hash functions, but its speed is comparable. The combination of speed and security made SipHash a safe bet for a general-purpose hash table. It's now used as a hash function in Python, Perl, Ruby, Rust, Swift and other languages. To learn more about SipHash, check out [the paper](http://cr.yp.to/siphash/siphash-20120918.pdf) by Aumasson and Bernstein.
 
-To learn more about SipHash, check out [the paper](http://cr.yp.to/siphash/siphash-20120918.pdf) by Aumasson and Bernstein.
+The choice of the hash function plays a huge role in the performance of a hash table. It is, however, not the only choice hash table designers have to make. They also have to decide how to handle hash collisions. Chaining is one option, but there are other methods that often perform better and are used in the state-of-the-art hash table implementations. Let us now see what those methods are.
 
+## Collision resolution methods
+
+We saw that chaining can be used to implement a hash table whose average-case performance is constant. Asymptotically, we cannot do better. But asymptotic behavior is not what's important in practice. What's important in practice is the actual time it takes to process real-world data and the amount of memory required to to that. From this perspective, it is possible to do better than chaining.
+
+There are two main directions of improvement:
+
+* making the hash table more memory-efficient; and
+* reducing the number of cache misses.
+
+The first direction of improvement comes from the fact that a hash table with chaining stores a linked list pointer for every (key, value) pair. Suppose that the hash table takes certain amount of memory. How much of this memory can we save if we manage to get rid of linked list pointers? If the size of a pointer is significantly less than the size of a (key, value) pair, then, loosely speaking, we won't save much. But if the keys and values take little space (e.g. there are pointers themselves), then significant portion of the memory can be saved.
+
+A more memory-efficient hash table means not only that it takes less space for the same number of buckets but also that it has more buckets for the same amount of space. More buckets means less hash collisions, so memory and speed are closely related. One way to make a hash table faster is to make it more memory-efficient. 
+
+Another way to improve upon chaining is to design a cache-friendly hash table. Up until now we've been measuring the time complexity of algorithms in the number of elementary operations such as the number of linked list entries we need to traverse to lookup the key.
+
+
+
+Memory access is a very expensive operation compared to 
