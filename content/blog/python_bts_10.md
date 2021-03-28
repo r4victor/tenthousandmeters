@@ -198,7 +198,9 @@ The choice of the hash function plays a huge role in the performance of a hash t
 
 We saw that chaining can be used to implement a hash table whose average-case performance is constant. Asymptotically, we cannot do better. But asymptotic behavior is not what's important in practice. What's important in practice is the actual time it takes to process real-world data and the amount of memory required to do that. From this perspective, other collision resolution methods often perform better than chaining. Most of them are based on the same idea called **open addressing**.
 
-In open addressing, all items are stored directly in the hash table. Hash collisions are resolved by using a hash function of a special form. Instead of mapping each key to a single bucket, a hash function of this form maps each key to a sequence of buckets. Such a sequence is called a **probe sequence**. To insert a new (key, value) pair, we iterate over the buckets in the probe sequence until we find an empty bucket and store the pair there. We will always find an empty bucket eventually if the hash table is not full and if the probe sequence covers all the buckets in the hash table. In addition to that, the probe sequence should be a permutation of buckets since visiting the same bucket more than once is a waste of time. The following picture illustrates the insertion process into a hash table with open addressing:
+In open addressing, all items are stored directly in the hash table. Hash collisions are resolved by using a hash function of a special form. Instead of mapping each key to a single bucket, a hash function of this form maps each key to a sequence of buckets. Such a sequence is called a **probe sequence**. Buckets in a probe sequence are often referred to as **probes**.
+
+To insert a new (key, value) pair in a hash table with open addressing, we iterate over the buckets in the probe sequence until we find an empty bucket and store the pair there. We will always find an empty bucket eventually if the hash table is not full and if the probe sequence covers all the buckets in the hash table. In addition to that, the probe sequence should be a permutation of buckets since visiting the same bucket more than once is a waste of time. The following picture illustrates the insertion process into a hash table with open addressing:
 
 <img src="{static}/blog/python_bts_10/hash_table_with_open_addressing.png" alt="hash_table_with_open_addressing" style="width:700px; display: block; margin: 20px auto 0 auto;" />
 
@@ -212,13 +214,13 @@ The problem is typically solved by marking the key deleted instead of actually d
 
 One advantage of open addressing over chaining is that the hash table doesn't store a linked list pointer for every item in the hash table. This saves space. On the other hand, empty buckets take more space because each bucket stores an item instead of a pointer. Whether a hash table with open addressing is more memory-efficient depends on the size of items. If the items are much larger than pointers, than chaining is better. But if the items take little space (e.g. the keys and the values are pointers themselves), then open addressing wins. The saved space can then be used to increase the number of buckets. More buckets means less hash collisions, and less hash collisions means the hash table is faster.
 
-So, how do we construct a hash function that returns probe sequences? Typically, it's built of ordinary hash functions that we've studied before. In **linear probing**, for example, an ordinary hash function is used to compute the first bucket in the probe sequence. Every next bucket in the probe sequence is just the next bucket in the hash table:
+So, how do we construct a hash function that returns probe sequences? Typically, it's built of ordinary hash functions that we've studied before. In **linear probing**, for example, an ordinary hash function is used to compute the first probe. Every next probe is just the next bucket in the hash table:
 
 ```text
 probe_sequence[i] = hash(key) + i % number_of_buckets
 ```
 
-So, if the first bucket is `b`, the probe sequence is:
+So, if the first probe is bucket `b`, then the probe sequence is:
 
 ````text
 [b, b + 1, b + 2, ..., number_of_buckets - 1, 0, 1, ..., b - 1]
@@ -230,17 +232,35 @@ As we've already discussed, the second condition is hard-to-impossible to satisf
 
 $$E[\#scanned\_buckets(load\_factor)] \approx \frac{1}{2}(1 + \frac{1}{(1-load\_factor)^2})$$
 
-If we take a load factor of 90%, then we'll have about 50 buckets scanned on average. Thus, the load factor should be much lower, and that means more empty buckets and higher memory usage.
+If we take a load factor of 90%, then we'll have about 50 buckets scanned on average. Thus, the load factor should be much lower. And that means more empty buckets and higher memory usage.
 
-When we insert a new key or lookup a key that is not in the hash table, we want to find an empty bucket as soon as possible. With linear probing, it can be a problem because of contiguous clusters of occupied buckets. Such cluster tend to grow because the larger the claster is, the more likely the next key will hash to the bucket in that cluster and will be inserted at its end. This problem is known as **primary clustering**.
+When we insert a new key or lookup a key that is not in the hash table, we want to find an empty bucket as soon as possible. With linear probing, it can be a problem because of contiguous clusters of occupied buckets. Such clusters tend to grow because the larger the cluster is, the more likely the next key will hash to the bucket in that cluster and will be inserted at its end. This problem is known as **primary clustering**.
 
-**Quadratic probing** solves the primary clustering problem and is less sensitive to the quality of the hash function. It's similiar to linear probing. The difference is that the i-th bucket in the probe sequence depends quadratically on i:
+**Quadratic probing** solves the primary clustering problem and is less sensitive to the quality of the hash function. It's similiar to linear probing. The difference is that the value of the i-th probe depends quadratically on i:
 
 ```text
 probe_sequence[i] = hash(key) + a * i + b * (i ** 2)  % number_of_buckets
 ```
 
-The constants `a` and `b` must be choosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first bucket is `b`, then the sequence is goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the step between two consecutive elements increases each time by 1. These are the [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To see why they produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
+The constants `a` and `b` must be choosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first probe is bucket `b`, then the sequence goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the interval between two consecutive probes increases by 1 at each step. Thus, the intervals form a sequence of numbers known as [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To learn why triangular numbers produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
+
+Quadratic probing is still quite sensitive to the quality of the hash function because the probe sequences of two different keys will be identical whenever the keys map to the same bucket. This situation is also a form of clustering known as **secondary clustering**. There is a probing scheme that mitigates it. It's called **double hashing**.
+
+In double hashing, the interval between two consecutive probes depends on the key itself. More specifically, a second, independent hash function determines the interval, so the probe sequence is calculated as follows:
+
+```text
+probe_sequence[i] = hash1(key) + hash2(key) * i % number_of_buckets
+```
+
+To ensure that the probe sequence covers all the buckets, the `hash2()` function must produce hashes that are relatively prime to the number of buckets, that is, `hash2(key)` and `number_of_buckets` must have no common factors except 1. This can be achieved by constructing the `hash2()` function in such a way so that it always returns a odd number and by setting the size of the hash table to a power of 2.
+
+In theory, the more "random" probe sequences are, the better. But theory and practice do not always agree. Up until now we've been measuring the time complexity of algorithms in the number of elementary steps, such as the number of scanned buckets or the number of traversed linked list nodes. This metric works fine for asymptotic analysis, but it does not agree with actual time measurements because it assumes that the cost of each elementary step is roughly the same, and that's not true in reality. In reality, the steps that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, one of the most important aspects of hash table design is the effective use of the cache.
+
+Linear probing may perform quite well because it's very cache-friendly. To see why, recall that the data is moved from the main memory to the cache in cache lines, which are contiguous blocks of memory, typically 64 bytes long. When the contents of the first bucket in a probe sequence have been read, the contents of the next several buckets are already in the cache.
+
+As a general rule, a data structure will be more cache-effective, if the items that are often used together are placed close to each other in memory. Open addressing follows this rule much better than chaining because in chaining each item sits in a separately allocated node.
+
+--
 
 Like chaining, open addressing guarantees constant average-case performance under two conditions. The first condition is the same: the load factor must be bounded by a constant. The second condition is that the hash function is equally likely to map a key to any permutation of buckets.
 
