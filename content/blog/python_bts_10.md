@@ -42,7 +42,7 @@ We now have a working hash table. How well does it perform? The worst-case analy
 
 $$load\_factor = \frac{number\_of\_items}{number\_of\_buckets}$$
 
-Theory says that if a key is equally likely to hash to any bucket and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is constant.
+Theory says that if every key is equally likely to hash to any bucket, independently of other keys, and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is $O(1)$.
 
 To see why this statement is true, insert $n$ different keys into the hash table with $m$ buckets and calculate the [expected](https://en.wikipedia.org/wiki/Expected_value) length of any chain. It will be equal to the load factor:
 
@@ -51,7 +51,7 @@ $$E[len(chain_j)] = \sum_{i=1}^{n} \Pr[key_i \;maps \;to \;bucket\; j ] = n \tim
 For more elaborate proofs, consult a textbook. [Introduction to Algorithms](https://en.wikipedia.org/wiki/Introduction_to_Algorithms) (a.k.a. CLRS) is a good choice.
 
 
-How reasonable are the assumptions of the statement? The load factor assumption is easy to satisfy. We just double the size of the hash table when the load factor exceeds some predefined limit. Let this limit be 2. Then if, upon insertion, the load factor becomes more than 2, we allocate a new hash table that has twice as many buckets as the current one and reinsert all the items into the new hash table. This way, no matter how many items we insert into the hash table, the load factor is always kept between 1 and 2. The cost of resizing the hash table is proportional to the number of items in it, so inserts that trigger resizing are expensive. Nevertheless, such inserts are rare because the size of the hash table grows in the geometric progression. The expected time of a single insert remains constant.
+How reasonable are the assumptions of the statement? The load factor assumption is easy to satisfy. We just double the size of the hash table when the load factor exceeds some predefined limit. Let this limit be 2. Then if, upon insertion, the load factor becomes more than 2, we allocate a new hash table that has twice as many buckets as the current one and reinsert all the items into the new hash table. This way, no matter how many items we insert into the hash table, the load factor is always kept between 1 and 2. The cost of resizing the hash table is proportional to the number of items in it, so inserts that trigger resizing are expensive. Nevertheless, such inserts are rare because the size of the hash table grows in the geometric progression. The expected time of a single insert remains $O(1)$.
 
 The other assumption means that the probability of a key being mapped to a bucket must be the same for all buckets and equal to `1/number_of_buckets`. In other words, the hash function must produce uniformly distributed hashes. It's not that easy to construct such a hash function because the distribution of hashes may depend on the distribution of keys. For example, if the keys are integers, and each integer is equally likely to be the next key, then the modulo hash function `h(key) = key % number_of_buckets` will give uniform distribution of hashes. But suppose that the keys are limited to even integers. Then, if the number of buckets is even, the modulo hash function will never map a key to an odd bucket. At least half of buckets won't be used. 
 
@@ -163,11 +163,11 @@ $$h_{a, b}(x) = ((ax + b)\;\%\;p)\;\%\;number\_of\_buckets$$
 
 where $p$ is any fixed prime number at least as large as the number of possible keys, and $a \in \{1, ...p-1\}$ and $b \in \{0, ...p-1\}$ are parameters choosen at random that specify a concrete hash function from the family.
 
-What does universality give us? Suppose that we randomly choose a hash function from a universal family and use this hash function to insert a sequence of keys into a hash table with chaining and table resizing as described in the previous section. Then theory says that the expected length of each chain in the hash table is bounded by a constant. This implies that the expected time of a single insert, lookup and delete operation is constant. And it does not matter what keys we insert!
+What does universality give us? Suppose that we randomly choose a hash function from a universal family and use this hash function to insert a sequence of keys into a hash table with chaining and table resizing as described in the previous section. Then theory says that the expected length of each chain in the hash table is bounded by a constant. This implies that the expected time of a single insert, lookup and delete operation is $O(1)$. And it does not matter what keys we insert!
 
 Note that we've made a similiar statement before:
 
-> Theory says that if a key is equally likely to hash to any bucket and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is constant.
+> Theory says that if every key is equally likely to hash to any bucket, independently of other keys, and if the load factor is bounded by a constant, then the expected time of a single insert, lookup and delete operation is $O(1)$.
 
 The important difference is that in the case of universal hashing the word "expected"  means averaging over hash functions, while the statement from the previous section refers to averaging over the keys.
 
@@ -196,19 +196,84 @@ The choice of the hash function plays a huge role in the performance of a hash t
 
 ## Collision resolution methods
 
-We saw that chaining can be used to implement a hash table whose average-case performance is constant. Asymptotically, we cannot do better. But asymptotic behavior is not what's important in practice. What's important in practice is the actual time it takes to process real-world data and the amount of memory required to to that. From this perspective, it is possible to do better than chaining.
+We saw that chaining can be used to implement a hash table whose average-case performance is constant. Asymptotically, we cannot do better. But asymptotic behavior is not what's important in practice. What's important in practice is the actual time it takes to process real-world data and the amount of memory required to do that. From this perspective, other collision resolution methods often perform better than chaining. Most of them are based on the same idea called **open addressing**.
+
+In open addressing, all items are stored directly in the hash table. Hash collisions are resolved by using a hash function of a special form. Instead of mapping each key to a single bucket, a hash function of this form maps each key to a sequence of buckets. Such a sequence is called a **probe sequence**. To insert a new (key, value) pair, we iterate over the buckets in the probe sequence until we find an empty bucket and store the pair there. We will always find an empty bucket eventually if the hash table is not full and if the probe sequence covers all the buckets in the hash table. In addition to that, the probe sequence should be a permutation of buckets since visiting the same bucket more than once is a waste of time. The following picture illustrates the insertion process into a hash table with open addressing:
+
+<img src="{static}/blog/python_bts_10/hash_table_with_open_addressing.png" alt="hash_table_with_open_addressing" style="width:700px; display: block; margin: 20px auto 0 auto;" />
+
+To lookup the value of a key, we iterate over the buckets in the probe sequence until we either find the key or find an empty bucket. If we find an empty bucket, then the key is not in the hash table because otherwise it would be inserted into the empty bucket that we found.
+
+Deleting a key from a hash table with open addressing is not that straightforward. If we just clear the bucket it occupies, then some lookups will break because lookups assume that there are no gaps in a probe sequence. The following picture illustrates the problem:
+
+<img src="{static}/blog/python_bts_10/hash_table_deletion.png" alt="hash_table_deletion" style="width:400px; display: block; margin: 20px auto 30px auto;" />
+
+The problem is typically solved by marking the key deleted instead of actually deleting it. This way, it continues to occupy the bucket, so lookups do not break. The bucket can be reused later. The opportinity to reuse the bucket may not arise, but the dummy item will be removed eventually anyway when the hash table resizes.
+
+One advantage of open addressing over chaining is that the hash table doesn't store a linked list pointer for every item in the hash table. This saves space. On the other hand, empty buckets take more space because each bucket stores an item instead of a pointer. Whether a hash table with open addressing is more memory-efficient depends on the size of items. If the items are much larger than pointers, than chaining is better. But if the items take little space (e.g. the keys and the values are pointers themselves), then open addressing wins. The saved space can then be used to increase the number of buckets. More buckets means less hash collisions, and less hash collisions means the hash table is faster.
+
+So, how do we construct a hash function that returns probe sequences? Typically, it's built of ordinary hash functions that we've studied before. In **linear probing**, for example, an ordinary hash function is used to compute the first bucket in the probe sequence. Every next bucket in the probe sequence is just the next bucket in the hash table:
+
+```text
+probe_sequence[i] = hash(key) + i % number_of_buckets
+```
+
+So, if the first bucket is `b`, the probe sequence is:
+
+````text
+[b, b + 1, b + 2, ..., number_of_buckets - 1, 0, 1, ..., b - 1]
+````
+
+Despite its simplicity, linear probing guarantees constant average-case performance under two conditions. The first conditions is that the load factor must be strictly less than 1. The second condition is that the `hash()` function must map every key with equal probability to any bucket and independently of other keys.
+
+As we've already discussed, the second condition is hard-to-impossible to satisfy. In practice, we choose a hash function that works well enough, but linear probing is very sensitive to the quality of the hash function, so it's harder to do. Another issue is that the load factor must be low if we want a decent performance. Consider the following estimate of the expected number of scanned buckets to insert a new key that Donald Knuth derives in [his proof](https://jeffe.cs.illinois.edu/teaching/datastructures/2011/notes/knuth-OALP.pdf) of the statement:
+
+$$E[\#scanned\_buckets(load\_factor)] \approx \frac{1}{2}(1 + \frac{1}{(1-load\_factor)^2})$$
+
+If we take a load factor of 90%, then we'll have about 50 buckets scanned on average. Thus, the load factor should be much lower, and that means more empty buckets and higher memory usage.
+
+When we insert a new key or lookup a key that is not in the hash table, we want to find an empty bucket as soon as possible. With linear probing, it can be a problem because of contiguous clusters of occupied buckets. Such cluster tend to grow because the larger the claster is, the more likely the next key will hash to the bucket in that cluster and will be inserted at its end. This problem is known as **primary clustering**.
+
+**Quadratic probing** solves the primary clustering problem and is less sensitive to the quality of the hash function. It's similiar to linear probing. The difference is that the i-th bucket in the probe sequence depends quadratically on i:
+
+```text
+probe_sequence[i] = hash(key) + a * i + b * (i ** 2)  % number_of_buckets
+```
+
+The constants `a` and `b` must be choosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first bucket is `b`, then the sequence is goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the step between two consecutive elements increases each time by 1. These are the [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To see why they produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
+
+Like chaining, open addressing guarantees constant average-case performance under two conditions. The first condition is the same: the load factor must be bounded by a constant. The second condition is that the hash function is equally likely to map a key to any permutation of buckets.
+
+Unfortunately, there is no practical way to construct such a hash function. Practical hash functions that produce probe sequences are typically built of ordinary hash functions. In **linear probing**, for example, an ordinary hash function is used to compute the first bucket in a probe sequence, and every next bucket in the probe sequence is just the next bucket in the hash table. In other words, the i-th bucket in the probe seqeunce is computed as follows:
+
+
+Linear probing is not even close to meet the second condition of the statement. It can produce $number\_of\_buckets$ different probe sequences while there are $number\_of\_buckets!$ possible permutations of buckets. Therefore, most permutations are not used.
+
+Another issue with linear probing is clustering. When we insert a new key or lookup a key that is not in the hash table, we want to find an empty bucket as soon as possible. With linear probing
+
+
+
+---
 
 There are two main directions of improvement:
 
 * making the hash table more memory-efficient; and
 * making the hash table more cache-friendly.
 
-The first direction of improvement comes from the fact that a hash table with chaining stores a linked list pointer for every item in the hash table, and these pointers take space. We can save memory if we manage to get rid of the pointers. Sometimes it's worth doing and sometimes not. If the size of a pointer is significantly less than the size of a (key, value) pair, then we save only a small portion of the total memory occupied by the hash table. But if the keys and values take little space (e.g. there are pointers themselves), then significant portion of the memory can be saved.
+The first direction of improvement comes from the fact that a hash table with chaining stores a linked list pointer for every item in the hash table, and these pointers take space. We can save memory if we manage to get rid of the pointers. Sometimes it's worth doing and sometimes not. If the size of a pointer is significantly less than the size of a (key, value) pair, then we save only a small portion of the total memory occupied by the hash table. But if the keys and values take little space (e.g. there are pointers themselves), then a significant portion of the memory can be saved.
 
-A more memory-efficient hash table means not only that it takes less space for the same number of buckets but also that it has more buckets for the same amount of space. More buckets means less hash collisions, so memory and speed are closely related. One way to make a hash table faster is to make it more memory-efficient. 
+A more memory-efficient hash table not only takes less space for the same number of buckets but also has more buckets for the same amount of space. More buckets means less hash collisions, so memory and speed are closely related. One way to make a hash table faster is to make it more memory-efficient. 
 
-Another way to improve upon chaining is to design a more cache-friendly hash table. Up until now we've been measuring the time complexity of algorithms in the number of elementary operations such as the number of linked list entries we need to traverse to lookup the key.
+Another way to improve upon chaining is to design a more cache-friendly hash table. Up until now we've been measuring the time complexity of algorithms in the number of elementary operations such as the number of linked list entries we need to traverse to lookup a key. This metric works fine for asymptotic analysis, but it does not agree with actual time measurements because it assumes that the cost of each elementary operation is roughly the same, and that's not true in reality. In reality, the operations that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, a faster hash table should access main memory less frequently. When it needs to read some data, the data should better be in the CPU cache. 
 
+To see how the CPU cache affects hash table performance, consider the following graph:
 
+<img src="{static}/blog/python_bts_10/dict_performance.png" alt="dict_performance" style="width:758px; display: block; margin: 0 auto;" />
 
-Memory access is a very expensive operation compared to 
+This graph shows how the time of a single lookup in a Python dictionary changes as the number of items in the dictionary increases. It is clear that the time is not constant but increases as well. Why? Hash collisions cannot explain this behavior because the keys to insert and the keys to lookup were picked at random. You might also think that  it's a peculiarity of CPython's implementation, but it's not. Any other implementation would behave similarly. The real reason is that when the hash table is small, it fits completely into the CPU cache, so the CPU doesn't need to access the main memory. As the hash table grows larger, the CPU starts to access the main memory more frequently.
+
+A lot can be said about the effective use of the cache. Ulrich Drepper's paper [What Every Programmer Should Know About Memory](https://people.freebsd.org/~lstewart/articles/cpumemory.pdf) is a comprehensive source on this topic.
+
+```
+
+```
