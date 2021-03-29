@@ -38,6 +38,8 @@ With this approach, different keys may map to the same bucket. In fact, if the n
 
 To insert a (key, value) pair into such a table, we first hash the key to get its bucket and then search for the key in the corresponding linked list. If we find the key, we update the value. If we don't find the key, we add a new entry to the list. The lookup and delete operations are done in a similar manner.
 
+Since the comparison of keys may take a long time (e.g. the keys are lengthy strings), the hashes are typically compared first. If the hashes are not equal, then the keys are not equal either. It's a common practice to store the hash along with the key and the value to avoid recomputing it each time.
+
 We now have a working hash table. How well does it perform? The worst-case analysis is quite simple. If the set of possible keys is sufficiently large, then there is a non-zero chance that all the items we insert into the hash table will happen to be in the same bucket. The average-case performance is more promising. It largely depends on two factors. First, it depends on how evenly the hash function distributes the keys among buckets. Second, it depends on the average number of items per bucket. This latter characteristic of a hash table is called a **load factor**:
 
 $$load\_factor = \frac{number\_of\_items}{number\_of\_buckets}$$
@@ -161,7 +163,7 @@ Just to get an idea of what a universal family may look like, here's a classic e
 
 $$h_{a, b}(x) = ((ax + b)\;\%\;p)\;\%\;number\_of\_buckets$$
 
-where $p$ is any fixed prime number at least as large as the number of possible keys, and $a \in \{1, ...p-1\}$ and $b \in \{0, ...p-1\}$ are parameters choosen at random that specify a concrete hash function from the family.
+where $p$ is any fixed prime number at least as large as the number of possible keys, and $a \in \{1, ...p-1\}$ and $b \in \{0, ...p-1\}$ are parameters chosen at random that specify a concrete hash function from the family.
 
 What does universality give us? Suppose that we randomly choose a hash function from a universal family and use this hash function to insert a sequence of keys into a hash table with chaining and table resizing as described in the previous section. Then theory says that the expected length of each chain in the hash table is bounded by a constant. This implies that the expected time of a single insert, lookup and delete operation is $O(1)$. And it does not matter what keys we insert!
 
@@ -232,7 +234,7 @@ As we've already discussed, the second condition is hard-to-impossible to satisf
 
 $$E[\#scanned\_buckets(load\_factor)] \approx \frac{1}{2}(1 + \frac{1}{(1-load\_factor)^2})$$
 
-If we take a load factor of 90%, then we'll have about 50 buckets scanned on average. Thus, the load factor should be much lower. And that means more empty buckets and higher memory usage.
+If we take a load factor of 90%, then we'll have about 50 buckets scanned on average assuming that the number of items in the hash table is sufficiently large. Thus, the load factor should be much lower. And that means more empty buckets and higher memory usage.
 
 When we insert a new key or lookup a key that is not in the hash table, we want to find an empty bucket as soon as possible. With linear probing, it can be a problem because of contiguous clusters of occupied buckets. Such clusters tend to grow because the larger the cluster is, the more likely the next key will hash to the bucket in that cluster and will be inserted at its end. This problem is known as **primary clustering**.
 
@@ -242,7 +244,7 @@ When we insert a new key or lookup a key that is not in the hash table, we want 
 probe_sequence[i] = hash(key) + a * i + b * (i ** 2)  % number_of_buckets
 ```
 
-The constants `a` and `b` must be choosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first probe is bucket `b`, then the sequence goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the interval between two consecutive probes increases by 1 at each step. Thus, the intervals form a sequence of numbers known as [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To learn why triangular numbers produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
+The constants `a` and `b` must be chosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first probe is bucket `b`, then the sequence goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the interval between two consecutive probes increases by 1 at each step. Thus, the intervals form a sequence of numbers known as [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To learn why triangular numbers produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
 
 Quadratic probing is still quite sensitive to the quality of the hash function because the probe sequences of two different keys will be identical whenever the keys map to the same bucket. This situation is also a form of clustering known as **secondary clustering**. There is a probing scheme that mitigates it. It's called **double hashing**.
 
@@ -254,11 +256,23 @@ probe_sequence[i] = hash1(key) + hash2(key) * i % number_of_buckets
 
 To ensure that the probe sequence covers all the buckets, the `hash2()` function must produce hashes that are relatively prime to the number of buckets, that is, `hash2(key)` and `number_of_buckets` must have no common factors except 1. This can be achieved by constructing the `hash2()` function in such a way so that it always returns a odd number and by setting the size of the hash table to a power of 2.
 
-In theory, the more "random" probe sequences are, the better. But theory and practice do not always agree. Up until now we've been measuring the time complexity of algorithms in the number of elementary steps, such as the number of scanned buckets or the number of traversed linked list nodes. This metric works fine for asymptotic analysis, but it does not agree with actual time measurements because it assumes that the cost of each elementary step is roughly the same, and that's not true in reality. In reality, the steps that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, one of the most important aspects of hash table design is the effective use of the cache.
+The more "random" probe sequences are, the less likely clustering is to occur and the less probes we need. Thus, in theory, such sequences are better. But theory and practice do not always agree. Up until now we've been measuring the time complexity of algorithms in the number of elementary steps, such as the number of probes or the number of traversed linked list nodes. This metric works fine for asymptotic analysis, but it does not agree with the actual time measurements because it assumes that the cost of each elementary step is roughly the same, and that's not true in reality. In reality, the steps that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, one of the most important aspects of hash table design is the effective use of the cache.
 
-Linear probing may perform quite well because it's very cache-friendly. To see why, recall that the data is moved from the main memory to the cache in cache lines, which are contiguous blocks of memory, typically 64 bytes long. When the contents of the first bucket in a probe sequence have been read, the contents of the next several buckets are already in the cache.
+Linear probing may perform quite well because it's very cache-friendly. To see why, recall that data is moved from the main memory to the cache in cache lines, which are contiguous blocks of memory, typically 64 bytes long. When the contents of the first bucket in a probe sequence have been read, the contents of the next several buckets are already in the cache.
 
-As a general rule, a data structure will be more cache-effective, if the items that are often used together are placed close to each other in memory. Open addressing follows this rule much better than chaining because in chaining each item sits in a separately allocated node.
+As a general rule, a data structure will be more cache-effective if the items that are often used together are placed close to each other in memory. Linear probing follows this rule much better than quadratic probing or double hashing. And open addressing in general works better than chaining in this respect because in chaining each item sits in a separately allocated node.
+
+To better comprehend how much the cache affects hash table performance, consider the following graph:
+
+<img src="{static}/blog/python_bts_10/dict_performance.png" alt="dict_performance" style="width:758px; display: block; margin: 0 auto;" />
+
+This graph shows how the time of a single lookup in a Python dictionary changes as the number of items in the dictionary increases. It is clear that the time is not constant but increases as well. Why? Hash collisions are not the reason because the keys were chosen at random from a uniform distribution. You might also think that it's a peculiarity of a Python dictionary, but it's not. Any other hash table would behave similarly. The real reason is that when the hash table is small, it fits completely into the cache, so the CPU doesn't need to access the main memory. As the hash table grows larger, the portion of the hash table that is not in the cache grows as well, and the CPU has to access the main memory more frequently.
+
+By the way, have you noticed those zigzags in the graph? They indicate the moments when the hash table resizes.
+
+So, we've discussed a number of methods to resolve hash collisions: chaining and open addressing with various probing schemes. You probably think: why do we need all of them? The reason is that different methods suit different use cases. Chaining makes sense when the items are large and when deletes are frequent. Linear probing works best when the items are small and when the hash function distributes the keys uniformly. And quadratic probing and double hashing are a safe bet in most cases.
+
+State-of-the-art hash tables are typically variations of open addressing with some improvements. Google's [Swiss Table](https://abseil.io/about/design/swisstables), for example, uses SIMD instructions to probe several buckets in parallel. [This talk](https://www.youtube.com/watch?v=ncHmEUmJZf4) explains how it works in detail. Robin Hood hashing is perhaps the most popular advanced method to resolve hash collisions. To understand the idea behind it, observe that the number of probes to lookup a key equals the number of probes that was required to insert it. Robin Hood hashing tries to keeps these numbers low.
 
 --
 
