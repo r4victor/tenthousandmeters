@@ -219,7 +219,7 @@ One advantage of open addressing over chaining is that the hash table doesn't st
 So, how do we construct a hash function that returns probe sequences? Typically, it's built of ordinary hash functions that we've studied before. In **linear probing**, for example, an ordinary hash function is used to compute the first probe. Every next probe is just the next bucket in the hash table:
 
 ```text
-probe_sequence[i] = hash(key) + i % number_of_buckets
+probes[i] = hash(key) + i % number_of_buckets
 ```
 
 So, if the first probe is bucket `b`, then the probe sequence is:
@@ -241,26 +241,40 @@ When we insert a new key or lookup a key that is not in the hash table, we want 
 **Quadratic probing** solves the primary clustering problem and is less sensitive to the quality of the hash function. It's similiar to linear probing. The difference is that the value of the i-th probe depends quadratically on i:
 
 ```text
-probe_sequence[i] = hash(key) + a * i + b * (i ** 2)  % number_of_buckets
+probes[i] = hash(key) + a * i + b * (i ** 2) % number_of_buckets
 ```
 
-The constants `a` and `b` must be chosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first probe is bucket `b`, then the sequence goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the interval between two consecutive probes increases by 1 at each step. Thus, the intervals form a sequence of numbers known as [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To learn why triangular numbers produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
+The constants `a` and `b` must be chosen carefully for the probe sequence to cover all the buckets. When the size of the hash table is a power of 2, setting `a = b = 1/2` guarantees that the probe sequence will cover all the buckets before it starts repeating them. What does the probe sequence look like? If the first probe is bucket `b`, then the sequence goes like `b`, `b + 1`, `b + 3`, `b + 6`, `b + 10`, `b + 15`, `b + 21` and so on (modulo `number_of_buckets`). Note that the interval between two consecutive probes increases by 1 at each step. The intervals form a sequence of numbers known as [triangular numbers](https://en.wikipedia.org/wiki/Triangular_number). To learn why triangular numbers produce complete probe sequences, check out [this paper](http://www.chilton-computing.org.uk/acl/literature/reports/p012.htm).
 
-Quadratic probing is still quite sensitive to the quality of the hash function because the probe sequences of two different keys will be identical whenever the keys map to the same bucket. This situation is also a form of clustering known as **secondary clustering**. There is a probing scheme that mitigates it. It's called **double hashing**.
+An alternative to quadratic probing is **pseudo-random probing**. Like other probing schemes, it computes the first probe by calling the hash function:
+
+```text
+probes[0] = hash(key) % number_of_buckets
+```
+
+Then it passes the first probe as a seed to a pseudo-random number generator (PRNG) to compute the subsequent probes. Typically, the PRNG is implemented as a [linear congruential generator](https://en.wikipedia.org/wiki/Linear_congruential_generator), so the probes are computed as follows: 
+
+```text
+probes[i] = a * probes[i-1] + c % number_of_buckets
+```
+
+[Hull–Dobell Theorem](https://en.wikipedia.org/wiki/Linear_congruential_generator#c_%E2%89%A0_0) tells us how to choose the constants `a` and `c` so that the probe sequence convers all the buckets before it starts repeating them. Setting `a = 5` and `c = 1` when the size of the hash table is a power of 2 will do the job.
+
+Quadratic probing and pseudo-random probing are still quite sensitive to the quality of the hash function because the probe sequences of two different keys will be identical whenever the keys map to the same bucket initially. This situation is also a form of clustering known as **secondary clustering**. There is a probing scheme that mitigates it. It's called **double hashing**.
 
 In double hashing, the interval between two consecutive probes depends on the key itself. More specifically, a second, independent hash function determines the interval, so the probe sequence is calculated as follows:
 
 ```text
-probe_sequence[i] = hash1(key) + hash2(key) * i % number_of_buckets
+probes[i] = hash1(key) + hash2(key) * i % number_of_buckets
 ```
 
 To ensure that the probe sequence covers all the buckets, the `hash2()` function must produce hashes that are relatively prime to the number of buckets, that is, `hash2(key)` and `number_of_buckets` must have no common factors except 1. This can be achieved by constructing the `hash2()` function in such a way so that it always returns a odd number and by setting the size of the hash table to a power of 2.
 
-The more "random" probe sequences are, the less likely clustering is to occur and the less probes we need. Thus, in theory, such sequences are better. But theory and practice do not always agree. Up until now we've been measuring the time complexity of algorithms in the number of elementary steps, such as the number of probes or the number of traversed linked list nodes. This metric works fine for asymptotic analysis, but it does not agree with the actual time measurements because it assumes that the cost of each elementary step is roughly the same, and that's not true in reality. In reality, the steps that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, one of the most important aspects of hash table design is the effective use of the cache.
+The more "random" probe sequences are, the less likely clustering is to occur and the less probes are needed. Thus, in theory, such sequences are better. But theory and practice do not always agree. Up until now we've been measuring the time complexity of algorithms in the number of elementary steps, such as the number of probes or the number of traversed linked list nodes. This metric works fine for asymptotic analysis, but it does not agree with the actual time measurements because it assumes that the cost of each elementary step is roughly the same, and that's not true in reality. In reality, the steps that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, one of the most important aspects of hash table design is the effective use of the cache.
 
 Linear probing may perform quite well because it's very cache-friendly. To see why, recall that data is moved from the main memory to the cache in cache lines, which are contiguous blocks of memory, typically 64 bytes long. When the contents of the first bucket in a probe sequence have been read, the contents of the next several buckets are already in the cache.
 
-As a general rule, a data structure will be more cache-effective if the items that are often used together are placed close to each other in memory. Linear probing follows this rule much better than quadratic probing or double hashing. And open addressing in general works better than chaining in this respect because in chaining each item sits in a separately allocated node.
+As a general rule, a data structure will be more cache-effective if the items that are often used together are placed close to each other in memory. Linear probing follows this rule much better than other probing schemes. And open addressing in general works better than chaining in this respect because in chaining each item sits in a separately allocated node.
 
 To better comprehend how much the cache affects hash table performance, consider the following graph:
 
@@ -270,9 +284,116 @@ This graph shows how the time of a single lookup in a Python dictionary changes 
 
 By the way, have you noticed those zigzags in the graph? They indicate the moments when the hash table resizes.
 
-So, we've discussed a number of methods to resolve hash collisions: chaining and open addressing with various probing schemes. You probably think: why do we need all of them? The reason is that different methods suit different use cases. Chaining makes sense when the items are large and when deletes are frequent. Linear probing works best when the items are small and when the hash function distributes the keys uniformly. And quadratic probing and double hashing are a safe bet in most cases.
+So, we've discussed a number of methods to resolve hash collisions: chaining and open addressing with various probing schemes. You probably think: why do we need all of them? The reason is that different methods suit different use cases. Chaining makes sense when the items are large and when deletes are frequent. Linear probing works best when the items are small and when the hash function distributes the keys uniformly. And quadratic probing, pseudo-random probing and double hashing are a safe bet in most cases.
 
-State-of-the-art hash tables are typically variations of open addressing with some improvements. Google's [Swiss Table](https://abseil.io/about/design/swisstables), for example, uses SIMD instructions to probe several buckets in parallel. [This talk](https://www.youtube.com/watch?v=ncHmEUmJZf4) explains how it works in detail. Robin Hood hashing is perhaps the most popular advanced method to resolve hash collisions. To understand the idea behind it, observe that the number of probes to lookup a key equals the number of probes that was required to insert it. Robin Hood hashing tries to keeps these numbers low.
+State-of-the-art hash tables are typically variations of open addressing with some improvements. Google's [Swiss Table](https://abseil.io/about/design/swisstables), for example, uses [SIMD](https://en.wikipedia.org/wiki/SIMD) instructions to probe several buckets in parallel. [This talk](https://www.youtube.com/watch?v=ncHmEUmJZf4) explains how it works in detail. [Robin Hood hashing](https://en.wikipedia.org/wiki/Hash_table#Robin_Hood_hashing) is perhaps the most popular advanced method to resolve hash collisions. To understand the idea behind it, observe that the number of probes to lookup a key equals the number of probes that was required to insert it. Naturally, we would like to keep those numbers low. And that's what Robin Hood hashing tries to do. When a new key gets inserted, it doesn't just wait for an empty bucket but can also displace other keys. It displaces any key whose final probe number is less than the number of the current probe. The displaced key then continues on its probe sequence, possibly displacing other keys. As a result, large probe numbers do not emerge, and lookups become faster. To learn more about the benefits of Robin Hood hashing, check out [this post](https://www.sebastiansylvan.com/post/robin-hood-hashing-should-be-your-default-hash-table-implementation/). See also [Malte Skarupke's talk](https://www.youtube.com/watch?v=M2fKMP47slQ) to learn more about advanced methods to resolve hash collisions.
+
+Well done! We've covered the essentials of hash table design. There is much more to say on this topic, but we now know enough to understand how Python dictionaries work. Without further ado, let's apply our knowledge.
+
+## Python dictionaries
+
+### Overview
+
+A Python dictionary is a hash table with open addressing. Its size is always a power of 2, and its load factor varies between 1/3 and 2/3.
+
+The hash of a Python object is a 32-bit or 64-bit singed integer (on 32-bit and 64-bit platforms respectively). We call the built-in `hash()` function to compute it, and this function works by calling the `tp_hash` slot of the object's type. Built-in types implement the `tp_hash` slot directly, and classes can implement it by defining the `__hash__()` special method. Thus, the hash function is different for different types. Strings and `bytes` objects are hashed with SipHash, while other types implement custom, simpler hashing algorithms.
+
+The hash of an integer, for example, is usually the integer itself:
+
+```pycon
+$ python -q
+>>> hash(1)
+1
+>>> hash(2343)
+2343
+>>> hash(-54)
+-54
+```
+
+This is not always the case because Python integers can be arbitrary large. So, CPython implements a hashing algorithm that works like this:
+
+```python
+MODULUS = 2 ** 61 - 1 # Mersenne prime; taking the modulus is efficient
+
+def hash_unoptimized(integer):
+    """Unoptimized version of hash() for integers"""
+    hash_value = abs(integer) % MODULUS
+    if integer < 0:
+        hash_value = -hash_value
+
+    if hash_value == -1: # -1 indicates an error; do not use it
+        return -2
+    
+    return hash_value
+```
+
+Because the algorithm is so simple, it's very easy to come up with a sequence of integers that all have the same hash:
+
+```pycon
+$ python -q
+>>> modulus = 2 ** 61 - 1
+>>> hash(0)
+0
+>>> hash(modulus)
+0
+>>> hash(modulus * 2)
+0
+>>> hash(modulus * 3)
+0
+>>> hash(modulus * 1000)
+0
+```
+
+Isn't this a security issue? Apparently, CPython developers thougth that nobody in a sane mind would cast keys to integers automatically when parsing untrusted user input, so they decided not to use SipHash in this case.
+
+But even non-malicious inputs exhibit regularities that such a primitive hash function won't break. To mitigate the effects of poorly distributed hashes, CPython implements a clever probing scheme.
+
+The probing scheme is pseudo-random probing with a modification. To see the reasoning behind this modification, recall that pseudo-random probing suffers from secondary clustering: the whole probe sequence is determined by the first probe, and the first probe depends only on lower bits of the hash (`m` lower bits when the size of the hash table is `2**m`). CPython solves this problem by perturbing the first few probes with values that depend on higher bits of the hash. Here's what the algorithm that computes probes looks like:
+
+```python
+def get_probes(hash_value, hash_table_size):
+    mask = hash_table_size - 1 # used to take modulus fast
+    perturb = hash_value # used to perturb the probe sequence
+    probe = hash_value & mask
+
+    while True:
+        yield probe
+
+        perturb >>= 5
+        probe = (probe * 5 + perturb + 1) & mask
+```
+
+Initially, `perturb` is set to the hash value. Then, at each iteration, it is shifted 5 bits to the right and the result is added to the linear congruential generator to perturb the next probe. This way, every next probe depends on 5 extra bits of the hash until `perturb` becomes 0. When `perturb` becomes 0, the linear congruential generator is guaranteed to cover all the buckets by the Hull–Dobell Theorem.
+
+Despite the clever probing scheme, CPython hash tables seem very inefficient. First, their maximum load factor is 2/3, which is about 66.6%, and this is when state-of-the-art hash tables work well with load factors of 90% and more. So, there is a huge room for improvement here. Second, pseudo-random probing is not cache-friendly. And we saw how important the cache is.
+
+Are CPython hash tables really as inefficient as they seem? Well, they certainly perform worse than Google's Swiss Table with hundreds of millions of items. But they are not optimized for such huge loads. They are optimized to be compact and to be fast when the hash table is small enough to fit into the cache. This is because the most important uses of Python dictionaries are the storage and retrieval of object attributes, class methods and global variables. And in this cases, the dictionaries are typically small and many.
+
+CPython also employs some interesting optimizations to better fit the use cases above. Let's now take a look at them.
+
+### Compact dictionaries
+
+Before version 3.6, CPython hash tables looked like that:
+
+Since version 3.6, CPython hash tables look like this:
+
+### Shared keys
+
+### String interning
+
+--
+
+Initially, it's set to 8. Then it doubles every time the load factor exceeds 2/3. CPython does not calculate the load factor explicitly but keeps track of the number of available buckets that is initially set to 2/3 of the total number of buckets:
+
+```C
+#define USABLE_FRACTION(n) (((n) << 1)/3)
+```
+
+
+
+
+
+ It starts with 8 buckets, and then the number of buckets doubles every time 
 
 --
 
