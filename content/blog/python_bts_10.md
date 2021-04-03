@@ -294,9 +294,9 @@ Well done! We've covered the essentials of hash table design. There is much more
 
 ### Overview
 
-A Python dictionary is a hash table with open addressing. Its size is always a power of 2, and its load factor varies between 1/3 and 2/3.
+A Python dictionary is a hash table with open addressing. Its size is always a power of 2 and is initially set to 8. When the load factor exceeds 2/3, the hash table resizes. Usually, the size just doubles, but it can also be set to some lesser power of 2 if deleted items occupy a lot of buckets. In short, the load factor varies between 1/3 and 2/3.
 
-The hash of a Python object is a 32-bit or 64-bit singed integer (on 32-bit and 64-bit platforms respectively). We call the built-in `hash()` function to compute it, and this function works by calling the `tp_hash` slot of the object's type. Built-in types implement the `tp_hash` slot directly, and classes can implement it by defining the `__hash__()` special method. Thus, the hash function is different for different types. Strings and `bytes` objects are hashed with SipHash, while other types implement custom, simpler hashing algorithms.
+The hash of a Python object is a 32-bit or 64-bit singed integer (on 32-bit and 64-bit platforms respectively). We call the built-in `hash()` function to compute it, and this function works by calling the `tp_hash` slot of the object's type. Built-in types implement the `tp_hash` slot directly, and classes can implement it by defining the `__hash__()` special method. So, the hash function is different for different types. Strings and `bytes` objects are hashed with SipHash, while other types implement custom, simpler hashing algorithms.
 
 The hash of an integer, for example, is usually the integer itself:
 
@@ -365,70 +365,154 @@ def get_probes(hash_value, hash_table_size):
 
 Initially, `perturb` is set to the hash value. Then, at each iteration, it is shifted 5 bits to the right and the result is added to the linear congruential generator to perturb the next probe. This way, every next probe depends on 5 extra bits of the hash until `perturb` becomes 0. When `perturb` becomes 0, the linear congruential generator is guaranteed to cover all the buckets by the Hull–Dobell Theorem.
 
-Despite the clever probing scheme, CPython hash tables seem very inefficient. First, their maximum load factor is 2/3, which is about 66.6%, and this is when state-of-the-art hash tables work well with load factors of 90% and more. So, there is a huge room for improvement here. Second, pseudo-random probing is not cache-friendly. And we saw how important the cache is.
+Despite the clever probing scheme, CPython's hash tables seem very inefficient. First, their maximum load factor is 2/3, which is about 66.6%, and this is when state-of-the-art hash tables work well with load factors of 90% and more. So, there is a huge room for improvement here. Second, pseudo-random probing is not cache-friendly. And we saw how important the cache is.
 
-Are CPython hash tables really as inefficient as they seem? Well, they certainly perform worse than Google's Swiss Table with hundreds of millions of items. But they are not optimized for such huge loads. They are optimized to be compact and to be fast when the hash table is small enough to fit into the cache. This is because the most important uses of Python dictionaries are the storage and retrieval of object attributes, class methods and global variables. And in this cases, the dictionaries are typically small and many.
+Are CPython's hash tables really as inefficient as they seem? Well, they certainly perform worse than Google's Swiss Table with hundreds of millions of items. But they are not optimized for such huge loads. They are optimized to be compact and to be fast when the hash table is small enough to fit into the cache. This is because the most important uses of Python dictionaries are the storage and retrieval of object attributes, class methods and global variables. And in this cases, the dictionaries are typically small and many.
 
 CPython also employs some interesting optimizations to better fit the use cases above. Let's now take a look at them.
 
 ### Compact dictionaries
 
-Before version 3.6, CPython hash tables looked like that:
+Before version 3.6, the layout of CPython's hash tables was typical. Each bucket held a 24-byte entry that consisted of a hash, a key pointer and a value pointer. So, the following dictionary:
 
-Since version 3.6, CPython hash tables look like this:
+```python
+d = {"one": 1, "two": 2, "three": 3}
+```
+
+would be represeted like this:
+
+```python
+hash_table = [
+    ('--', '--', '--'),
+    (542403711206072985, 'two', 2),
+    ('--', '--', '--'),
+    (4677866115915370763, 'three', 3),
+    ('--', '--', '--'),
+    (-1182584047114089363, 'one', 1),
+    ('--', '--', '--'),
+    ('--', '--', '--')
+]
+```
+
+In CPython 3.6 the layout changed. Since then the entries are stored in a separate, dense array, and the hash table stores only the indices to that array. So, the same dictionary is represented like this:
+
+```python
+hash_table = [None, 1, None, 2, None, 0, None, None]
+entries = [
+    (-1182584047114089363, 'one', 1),
+    (542403711206072985, 'two', 2),
+    (4677866115915370763, 'three', 3),
+    ('--', '--', '--'),
+    ('--', '--', '--')
+]
+```
+
+Each index to the `entries` array takes 1, 2, 4 or 8 bytes depending on the size of the hash table. In any case it is much less than 24 bytes taken by an entry. As a result, empty buckets take less space, and dictionaries become more compact. Of course, the `entries` array should have extra space for future entries as well. Otherwise, it would have to resize on every insert. But CPython manages to save space nonetheless by setting the size of the `entries` array to 2/3 of the size of the hash table and resizing it when the hash table resizes.
+
+This optimization has other benifits too. Iteration over a dictionary became faster because entries are densely packed. And dictionaries became ordered because items are added to the `entries` array in the insertion order.
 
 ### Shared keys
 
+CPython stores the attributes of an object in the object's dictionary. Since instances of the same class often have the same attributes, there can be a lot of dictionaries that have the same keys but different values. And that's another opportunity to save space!
+
+Since CPython 3.3, object dictionaries of the same class share keys. The keys and hashes are stored in a separate data structure in the class, and the dictionaries store only a pointer to that structure and the values.
+
+For example, consider a simple class whose instances have the same two attributes:
+
+```python
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+```
+
+And consider two instances of this class:
+
+```python
+p1 = Point(4, 4)
+p2 = Point(5, 5)
+```
+
+The dictionaries of `p1` and `p2` will store their own arrays of values but will share everything else:
+
+```python
+hash_table = [None, 1, None, None, 0, None, None, None]
+entries = [
+    (-8001793907708313420, 'x', None),
+    (308703142051095673, 'y', None),
+    ('--', '--', '--'),
+    ('--', '--', '--'),
+    ('--', '--', '--')
+]
+
+values_p1 = [4, 4, None, None, None]
+values_p2 = [5, 5, None, None, None]
+```
+
+Of course, the keys can diverge. If we add a new attribute to an object, and this attribute is not among the shared keys, then the objects dictionary will be converted to an ordinary dictionary that doesn't share keys. And the dictionaries of new objects won't share keys as well. The conversion will not happen only when the object is the sole instance of the class. So, you should define all the attributes on the first instance before you create other instances. One way to do this is to define the attributes in the `__init__()` special method.
+
+To learn more about key-sharing dictionaries, check out [PEP 412](https://www.python.org/dev/peps/pep-0412/).
+
 ### String interning
 
---
+To lookup a key in a hash table, CPython has to find an equal key in the probe sequence. If two keys have different hashes, then CPython may safely assume that the keys are not equal. But if the keys have the same hash, it must compare the keys to see if they are equal or not. The comparison of keys may take a long time, but can be avoided altogether when the keys are in fact the same object. To check whether this is the case, we can just compare their ids (i.e. memory addresses). The only problem is to ensure that we always use the same object. 
 
-Initially, it's set to 8. Then it doubles every time the load factor exceeds 2/3. CPython does not calculate the load factor explicitly but keeps track of the number of available buckets that is initially set to 2/3 of the total number of buckets:
+When we create two strings with the same contents, what we usually get is two equal but distinct objects:
 
-```C
-#define USABLE_FRACTION(n) (((n) << 1)/3)
+```pycon
+$ python -q
+>>> a = 'hi!'
+>>> b = 'hi!'
+>>> a is b
+False
 ```
 
+To get a reference to the same object, we need to use the [`sys.intern()`](https://docs.python.org/3/library/sys.html) function:
 
-
-
-
- It starts with 8 buckets, and then the number of buckets doubles every time 
-
---
-
-Like chaining, open addressing guarantees constant average-case performance under two conditions. The first condition is the same: the load factor must be bounded by a constant. The second condition is that the hash function is equally likely to map a key to any permutation of buckets.
-
-Unfortunately, there is no practical way to construct such a hash function. Practical hash functions that produce probe sequences are typically built of ordinary hash functions. In **linear probing**, for example, an ordinary hash function is used to compute the first bucket in a probe sequence, and every next bucket in the probe sequence is just the next bucket in the hash table. In other words, the i-th bucket in the probe seqeunce is computed as follows:
-
-
-Linear probing is not even close to meet the second condition of the statement. It can produce $number\_of\_buckets$ different probe sequences while there are $number\_of\_buckets!$ possible permutations of buckets. Therefore, most permutations are not used.
-
-Another issue with linear probing is clustering. When we insert a new key or lookup a key that is not in the hash table, we want to find an empty bucket as soon as possible. With linear probing
-
-
-
----
-
-There are two main directions of improvement:
-
-* making the hash table more memory-efficient; and
-* making the hash table more cache-friendly.
-
-The first direction of improvement comes from the fact that a hash table with chaining stores a linked list pointer for every item in the hash table, and these pointers take space. We can save memory if we manage to get rid of the pointers. Sometimes it's worth doing and sometimes not. If the size of a pointer is significantly less than the size of a (key, value) pair, then we save only a small portion of the total memory occupied by the hash table. But if the keys and values take little space (e.g. there are pointers themselves), then a significant portion of the memory can be saved.
-
-A more memory-efficient hash table not only takes less space for the same number of buckets but also has more buckets for the same amount of space. More buckets means less hash collisions, so memory and speed are closely related. One way to make a hash table faster is to make it more memory-efficient. 
-
-Another way to improve upon chaining is to design a more cache-friendly hash table. Up until now we've been measuring the time complexity of algorithms in the number of elementary operations such as the number of linked list entries we need to traverse to lookup a key. This metric works fine for asymptotic analysis, but it does not agree with actual time measurements because it assumes that the cost of each elementary operation is roughly the same, and that's not true in reality. In reality, the operations that access main memory are the most expensive. A single access to RAM takes about 100 ns. Compare it to the cost of accessing the fastest [CPU cache](https://en.wikipedia.org/wiki/CPU_cache) – it's about 1 ns. Therefore, a faster hash table should access main memory less frequently. When it needs to read some data, the data should better be in the CPU cache. 
-
-To see how the CPU cache affects hash table performance, consider the following graph:
-
-<img src="{static}/blog/python_bts_10/dict_performance.png" alt="dict_performance" style="width:758px; display: block; margin: 0 auto;" />
-
-This graph shows how the time of a single lookup in a Python dictionary changes as the number of items in the dictionary increases. It is clear that the time is not constant but increases as well. Why? Hash collisions cannot explain this behavior because the keys to insert and the keys to lookup were picked at random. You might also think that  it's a peculiarity of CPython's implementation, but it's not. Any other implementation would behave similarly. The real reason is that when the hash table is small, it fits completely into the CPU cache, so the CPU doesn't need to access the main memory. As the hash table grows larger, the CPU starts to access the main memory more frequently.
-
-A lot can be said about the effective use of the cache. Ulrich Drepper's paper [What Every Programmer Should Know About Memory](https://people.freebsd.org/~lstewart/articles/cpumemory.pdf) is a comprehensive source on this topic.
-
+```pycon
+>>> import sys
+>>> a = sys.intern('hi!')
+>>> b = sys.intern('hi!')
+>>> a is b
+True
 ```
 
+The first call to `sys.intern()` will return the passed string but before that it will store the string in the dictionary of interned strings that maps each string to itself. The second call will find the string in the dictionary and return it.
+
+CPython interns many strings automatically. For example, it interns some string constants:
+
+```pycon
+>>> a = 'hi'
+>>> b = 'hi'
+>>> a is b
+True
 ```
+
+These are all the string constants that match this regex:
+
+```text
+[a-zA-Z0-9_]*
+```
+
+CPython also interns the names of variables and attributes so we don't have to do that ourselves.
+
+This concludes our study of Python dictionaries. We've covered the most important ideas behind them but left out some implementation details. If you want to know those details, take a look at the source code in [`Objects/dictobject.c`](https://github.com/python/cpython/blob/3.9/Objects/dictobject.c).
+
+## A note on sets
+
+Dictionaries are closely related to sets. In fact, sets are just dictionaries without values. Because of this, you might think that CPython implements sets in the same way as it implements dictionaries. But it doesn't. A set is a different objects and the hash table behind it works a bit differently. For example, its maximum load factor is not 66.6% but 60%, and if there are less than 50,000 items in the set, the growth factor is not 2 but 4. The most important difference is in the probing scheme. Sets use the same pseudo-random probing but, for every probe, they also inspect 9 buckets that follow the probe. It's basically a combination of pseudo-random and linear probing.
+
+CPython doesn't rely on sets internally as it relies on dictionaries so there is no need to optimize them for specific use cases. Moreover, the general use cases for sets are different. Here's a comment from the source code that explains this:
+
+> Use cases for sets differ considerably from dictionaries where looked-up keys are more likely to be present.  In contrast, sets are primarily about membership testing where the presence of an element is not known in advance.  Accordingly, the set implementation needs to optimize for both
+> the found and not-found case.
+
+The implementation of sets can be found in [`Objects/setobject.c`](Object/setobject.c).
+
+## Conclusion
+
+It's not that hard to implement your own hash table once you've seen how others do it. Still, it is hard to choose the design of a hash table that fits your use case best. CPython implements hash tables that are optimized both for general and internal use. The result is a unique and clever design. But it is also controversial. For example, the probing scheme is designed to tolerate bad hash functions, and this may come at the expense of cache-friendliness. Of course, it's all talk, and only benchmarks can tell the truth. But we cannot just take some state-of-the-art hash table for C++ and compare it with a Python dictionary because Python objects introduce overhead. A proper benchmark would implement Python dictionaries with different hash table designs. It's a lot of work, though, and I don't know of anyone who did it. So, do you have any plans for the next weekend?
+
+The `dict` type is a part of the `builtins` module, so we can always access it. Things that are not in `builtins` have to be imported before they can be used. And that's why we need the Python import system. Next time we'll see how it works.
+
