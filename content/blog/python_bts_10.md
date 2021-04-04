@@ -1,10 +1,13 @@
 Title: Python behind the scenes #10: how Python dictionaries work
 Date: 2021-03-02 5:49
 Tags: Python behind the scenes, Python, CPython
+Summary: Python dictionaries are an extremely important part of Python. Of course they are important because programmers use them a lot, but that's not the only reason. Another reason is that the interpreter uses them internally to run Python code. CPython does a dictionary lookup every time we access an object attribute or a class variable, and accessing a global or built-in variable also involves a dictionary lookup if the result is not cached. What makes a dictionary appealing is that lookups and other dictionary operations are fast and that they remain fast even as we add more and more elements to the dictionary. You probably know why this is the case: Python dictionaries are hash tables. A hash table is a fundamental data structure. The idea behind it is very simple and widely known. Yet, implementing a practical hash table is not a trivial task. There are different hash table designs that vary in complexity and performance. And new, better designs are constantly being developed.<br><br>The goal of this post is to learn how CPython implements hash tables. But understanding all the aspects of hash table design can be hard, and CPython's implementation is especially sophisticated, so we'll approach this topic gradually. In the first part of this post, we'll design a simple fully-functional hash table, discuss its capabilities and limitations and outline a general approach to design a hash table that works well in practice. In the second part, we'll focus on the specifics of CPython's implementation and finally see how Python dictionaries work behind the scenes.
 
-Python dictionaries are an extremely important part of Python. Of course they are important because programmers use them a lot, but that's not the only reason. Another reason is that the interpreter uses them internally to run Python code. CPython does a dictionary lookup every time we access an object's attribute or a class variable, and accessing a global or built-in variable also involves a dictionary lookup if the result is not cached. What makes a dictionary appealing is that lookups and other dictionary operations are fast and that they remain fast even as we add more and more elements to the dictionary. You probably know why this is the case: Python dictionaries are hash tables. A hash table is a fundamental data structure. The idea behind it is very simple and widely known. Yet, implementing a practical hash table is not a trivial task. There are different hash table designs that vary in complexity and performance. And new, better designs are constantly being developed.
+Python dictionaries are an extremely important part of Python. Of course they are important because programmers use them a lot, but that's not the only reason. Another reason is that the interpreter uses them internally to run Python code. CPython does a dictionary lookup every time we access an object attribute or a class variable, and accessing a global or built-in variable also involves a dictionary lookup if the result is not cached. What makes a dictionary appealing is that lookups and other dictionary operations are fast and that they remain fast even as we add more and more elements to the dictionary. You probably know why this is the case: Python dictionaries are hash tables. A hash table is a fundamental data structure. The idea behind it is very simple and widely known. Yet, implementing a practical hash table is not a trivial task. There are different hash table designs that vary in complexity and performance. And new, better designs are constantly being developed.
 
-The goal of this post is to learn how CPython implements hash tables. But understanding all the aspects of hash table design can be hard, and CPython's implementation is especially sophisticated, so we'll approach this topic gradually. In the first part of the post, we'll design a simple fully-functional hash table, discuss its capabilities and limitations and outline a general approach to design a hash table that works well in practice. In the second part, we'll focus on the specifics of CPython's implementation and finally see how Python dictionaries work behind the scenes.
+The goal of this post is to learn how CPython implements hash tables. But understanding all the aspects of hash table design can be hard, and CPython's implementation is especially sophisticated, so we'll approach this topic gradually. In the first part of this post, we'll design a simple fully-functional hash table, discuss its capabilities and limitations and outline a general approach to design a hash table that works well in practice. In the second part, we'll focus on the specifics of CPython's implementation and finally see how Python dictionaries work behind the scenes.
+
+**Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
 ## What is a dictionary
 
@@ -153,7 +156,7 @@ A fixed non-cryptographic hash function performs well in practice under normal c
 
 ### Universal hashing
 
-Note that attackers won't be able to come up with the sequence of colliding keys if they know nothing about the hash function used. So a randomly generated hash function is again the best solution. We said that we cannot use such a hash function in practice because it cannot be computed efficiently. But what if we randomly choose a hash function from a family of "good" functions that can be computed efficiently, won't it do the job? It will, though we need to find a suitable family of functions. A family won't be suitable, for example, if we can come up with a sequence of keys that collide for every function in the family. Ideally, we would like to have a family such that, for any set of keys, a function randomly chosen from the family is expected to distribute the keys uniformly among buckets. Such families exist, and they are called **universal families**. We say that a family of functions is universal if, for two fixed distinct keys, the propability to choose a function that maps the keys to the same bucket is less than `1/number_of_buckets`:
+Note that attackers won't be able to come up with the sequence of colliding keys if they know nothing about the hash function used. So a randomly generated hash function is again the best solution. We said that we cannot use such a hash function in practice because it cannot be computed efficiently. But what if we randomly choose a hash function from a family of "good" functions that can be computed efficiently, won't it do the job? It will, though we need to find a suitable family of functions. A family won't be suitable, for example, if we can come up with a sequence of keys that collide for every function in the family. Ideally, we would like to have a family such that, for any set of keys, a function randomly chosen from the family is expected to distribute the keys uniformly among buckets. Such families exist, and they are called **universal families**. We say that a family of functions is universal if, for two fixed distinct keys, the probability to choose a function that maps the keys to the same bucket is less than `1/number_of_buckets`:
 
 $$ \forall x \ne y \in Keys\;\; \underset{h\in F}\Pr[h(x) = h(y)] \le \frac{1}{number\_of\_buckets}$$
 
@@ -173,7 +176,7 @@ Note that we've made a similiar statement before:
 
 The important difference is that in the case of universal hashing the word "expected"  means averaging over hash functions, while the statement from the previous section refers to averaging over the keys.
 
-To learn more about the theory behind universal hashing, read the [paper](https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf) by Lawrence Carter and Mark Wegman that indroduced this concept. For examples of universal families, see [Mikkel Thorup's survey](https://arxiv.org/abs/1504.06804).
+To learn more about the theory behind universal hashing, read the [paper](https://www.cs.princeton.edu/courses/archive/fall09/cos521/Handouts/universalclasses.pdf) by Lawrence Carter and Mark Wegman that introduced this concept. For examples of universal families, see [Mikkel Thorup's survey](https://arxiv.org/abs/1504.06804).
 
 Universal hashing looks good in theory because it guarantees excellent average-case performance and protects against hash flooding. Nevertheless, you won't find many hash table implementations that actually use it. The reason is a combination of two facts:
 
@@ -190,7 +193,7 @@ SipHash takes a 128-bit secret key and a variable-length input and produces a 64
 
 Note that no hash function including SipHash can prevent the attackers from finding the colliding keys by bruteforce as we've seen in the example of a timing attack. This approach, however, requires $O(n^2)$ requests to find $n$ colliding keys, so the potential damage caused by the attack is significantly reduced.
 
-Note also that there is no formal proof of SipHash's security. Such proofs are beyond the state of the art of modern cryptography. Moreover, it's conceivable that somone will break SipHash in the future. Nevertheless, some cryptanalysis and evidence show that SipHash should work as a MAC today.
+Note also that there is no formal proof of SipHash's security. Such proofs are beyond the state of the art of modern cryptography. Moreover, it's conceivable that someone will break SipHash in the future. Nevertheless, some cryptanalysis and evidence show that SipHash should work as a MAC today.
 
 SipHash is not as fast as some non-cryptographic hash functions, but its speed is comparable. The combination of speed and security made SipHash a safe bet for a general-purpose hash table. It's now used as a hash function in Python, Perl, Ruby, Rust, Swift and other languages. To learn more about SipHash, check out the [paper](http://cr.yp.to/siphash/siphash-20120918.pdf) by Aumasson and Bernstein.
 
@@ -206,7 +209,7 @@ To insert a new (key, value) pair in a hash table with open addressing, we itera
 
 <img src="{static}/blog/python_bts_10/hash_table_with_open_addressing.png" alt="hash_table_with_open_addressing" style="width:700px; display: block; margin: 20px auto 0 auto;" />
 
-To lookup the value of a key, we iterate over the buckets in the probe sequence until we either find the key or find an empty bucket. If we find an empty bucket, then the key is not in the hash table because otherwise it would be inserted into the empty bucket that we found.
+To look up the value of a key, we iterate over the buckets in the probe sequence until we either find the key or find an empty bucket. If we find an empty bucket, then the key is not in the hash table because otherwise it would be inserted into the empty bucket that we found.
 
 Deleting a key from a hash table with open addressing is not that straightforward. If we just clear the bucket that the key occupies, then some lookups will break because lookups assume that probe sequences don't have gaps. This picture illustrates the problem:
 
@@ -238,7 +241,7 @@ If we take a load factor of 90%, then we'll have about 50 buckets scanned on ave
 
 When we insert a new key or look up a key that is not in a hash table, we want to find an empty bucket as soon as possible. With linear probing, it can be a problem because of contiguous clusters of occupied buckets. Such clusters tend to grow because the larger the cluster is, the more likely the next key will hash to a bucket in that cluster and will be inserted at its end. This problem is known as **primary clustering**.
 
-**Quadratic probing** solves the primary clustering problem and is less sensitive to the quality of the hash function. It's similiar to linear probing. The difference is that the value of the i-th probe depends quadratically on i:
+**Quadratic probing** solves the primary clustering problem and is less sensitive to the quality of the hash function. It's similar to linear probing. The difference is that the value of the i-th probe depends quadratically on i:
 
 ```text
 probes[i] = hash(key) + a * i + b * (i ** 2) % number_of_buckets
@@ -258,7 +261,7 @@ Then it passes the first probe as a seed to a pseudo-random number generator (PR
 probes[i] = a * probes[i-1] + c % number_of_buckets
 ```
 
-[Hull–Dobell Theorem](https://en.wikipedia.org/wiki/Linear_congruential_generator#c_%E2%89%A0_0) tells us how to choose the constants `a` and `c` so that the probe sequence convers all the buckets before it starts repeating them. If the size of the hash table is a power of 2, then setting `a = 5` and `c = 1` will do the job.
+[Hull–Dobell Theorem](https://en.wikipedia.org/wiki/Linear_congruential_generator#c_%E2%89%A0_0) tells us how to choose the constants `a` and `c` so that the probe sequence covers all the buckets before it starts repeating them. If the size of the hash table is a power of 2, then setting `a = 5` and `c = 1` will do the job.
 
 Quadratic probing and pseudo-random probing are still quite sensitive to the quality of the hash function because the probe sequences of two different keys will be identical whenever their first probes are the same. This situation is also a form of clustering known as **secondary clustering**. There is a probing scheme that mitigates it. It's called **double hashing**.
 
@@ -344,7 +347,7 @@ $ python -q
 0
 ```
 
-Isn't this a security issue? Apparently, CPython developers thougth that nobody in a sane mind would cast keys to integers automatically when parsing untrusted user input, so they decided not to use SipHash in this case.
+Isn't this a security issue? Apparently, CPython developers thought that nobody in a sane mind would cast keys to integers automatically when parsing untrusted user input, so they decided not to use SipHash in this case.
 
 But even non-malicious inputs exhibit regularities that such a primitive hash function won't break. To mitigate the effects of poorly distributed hashes, CPython implements a clever probing scheme.
 
@@ -379,7 +382,7 @@ Before version 3.6, the layout of CPython's hash tables was typical. Each bucket
 d = {"one": 1, "two": 2, "three": 3}
 ```
 
-would be represeted like this:
+would be represented like this:
 
 ```python
 hash_table = [
@@ -409,7 +412,7 @@ entries = [
 
 Each index to the `entries` array takes 1, 2, 4 or 8 bytes depending on the size of the hash table. In any case it is much less than 24 bytes taken by an entry. As a result, empty buckets take less space, and dictionaries become more compact. Of course, the `entries` array should have extra space for future entries as well. Otherwise, it would have to resize on every insert. But CPython manages to save space nonetheless by setting the size of the `entries` array to 2/3 of the size of the hash table and resizing it when the hash table resizes.
 
-This optimization has other benifits too. Iteration over a dictionary became faster because entries are densely packed. And dictionaries became ordered because items are added to the `entries` array in the insertion order.
+This optimization has other benefits too. Iteration over a dictionary became faster because entries are densely packed. And dictionaries became ordered because items are added to the `entries` array in the insertion order.
 
 ### Shared keys
 
@@ -516,3 +519,6 @@ It's not that hard to implement your own hash table once you've seen how others 
 
 The `dict` type is a part of the `builtins` module, so we can always access it. Things that are not in `builtins` have to be imported before they can be used. And that's why we need the Python import system. Next time we'll see how it works.
 
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
