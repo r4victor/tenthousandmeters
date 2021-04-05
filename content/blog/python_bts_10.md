@@ -1,5 +1,5 @@
 Title: Python behind the scenes #10: how Python dictionaries work
-Date: 2021-03-02 5:49
+Date: 2021-04-05 6:15
 Tags: Python behind the scenes, Python, CPython
 Summary: Python dictionaries are an extremely important part of Python. Of course they are important because programmers use them a lot, but that's not the only reason. Another reason is that the interpreter uses them internally to run Python code. CPython does a dictionary lookup every time you access an object attribute or a class variable, and accessing a global or built-in variable also involves a dictionary lookup if the result is not cached. What makes a dictionary appealing is that lookups and other dictionary operations are fast and that they remain fast even as we add more and more elements to the dictionary. You probably know why this is the case: Python dictionaries are hash tables. A hash table is a fundamental data structure. The idea behind it is very simple and widely known. Yet, implementing a practical hash table is not a trivial task. There are different hash table designs that vary in complexity and performance. And new, better designs are constantly being developed.<br><br>The goal of this post is to learn how CPython implements hash tables. But understanding all the aspects of hash table design can be hard, and CPython's implementation is especially sophisticated, so we'll approach this topic gradually. In the first part of this post, we'll design a simple fully-functional hash table, discuss its capabilities and limitations and outline a general approach to design a hash table that works well in practice. In the second part, we'll focus on the specifics of CPython's implementation and finally see how Python dictionaries work behind the scenes.
 
@@ -511,7 +511,7 @@ CPython doesn't rely on sets internally as it relies on dictionaries so there is
 > Use cases for sets differ considerably from dictionaries where looked-up keys are more likely to be present.  In contrast, sets are primarily about membership testing where the presence of an element is not known in advance.  Accordingly, the set implementation needs to optimize for both
 > the found and not-found case.
 
-The implementation of sets can be found in [`Objects/setobject.c`](Object/setobject.c).
+The implementation of sets can be found in [`Objects/setobject.c`](https://github.com/python/cpython/blob/3.9/Objects/setobject.c).
 
 ## Conclusion
 
