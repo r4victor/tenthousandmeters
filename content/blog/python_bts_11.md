@@ -79,7 +79,102 @@ True
 
 When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file as a script, it first creates a special module called `'__main__'` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the current module.
 
-Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's now see how Python executes the import statement.
+Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's see now see what Python does when it imports modules.
 
 ## Desugaring the import statement
+
+Recall that a piece of Python code is executed in two steps:
+
+1. The [compiler]({filename}/blog/python_bts_02.md) compiles the code to bytecode.
+2. The [VM]({filename}/blog/python_bts_01.md) executes the bytecode.
+
+To see how an import statement gets executed, we can look at the bytecode produced for it. As always, the [dis](https://docs.python.org/3/library/dis.html) standard module can help us with this:
+
+```text
+$ echo "import m" | python3 -m dis
+  1           0 LOAD_CONST               0 (0)
+              2 LOAD_CONST               1 (None)
+              4 IMPORT_NAME              0 (m)
+              6 STORE_NAME               0 (m)
+...
+```
+
+The first [`LOAD_CONST`](https://docs.python.org/3/library/dis.html#opcode-LOAD_CONST) instruction pushes `0` onto the value stack. The second `LOAD_CONST` pushes `None`. Then the `IMPORT_NAME` opcode does something that we'll look into in a moment. Finally, [`STORE_NAME`](https://docs.python.org/3/library/dis.html#opcode-STORE_NAME) assigns the value on top of the value stack to the variable `m`.
+
+The logic of opcode execution is implemented in the [evaluation loop]({filename}/blog/python_bts_04.md) in [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c). Here's the code that executes `IMPORT_NAME`:
+
+```C
+case TARGET(IMPORT_NAME): {
+    PyObject *name = GETITEM(names, oparg);
+    PyObject *fromlist = POP();
+    PyObject *level = TOP();
+    PyObject *res;
+    res = import_name(tstate, f, name, fromlist, level);
+    Py_DECREF(level);
+    Py_DECREF(fromlist);
+    SET_TOP(res);
+    if (res == NULL)
+        goto error;
+    DISPATCH();
+}
+```
+
+So, what `IMPORT_NAME` does is call the `import_name()` function and leaves the result of the call on top of the value stack. The constants `0` and `None` that were pushed onto the stack are used as the `level` and `fromlist` arguments. And the argument to `IMPORT_NAME` specifies the name of the module.
+
+The `import_name()` function is implemented as follows:
+
+```C
+static PyObject *
+import_name(PyThreadState *tstate, PyFrameObject *f,
+            PyObject *name, PyObject *fromlist, PyObject *level)
+{
+    _Py_IDENTIFIER(__import__);
+    PyObject *import_func, *res;
+    PyObject* stack[5];
+
+    import_func = _PyDict_GetItemIdWithError(f->f_builtins, &PyId___import__);
+    if (import_func == NULL) {
+        if (!_PyErr_Occurred(tstate)) {
+            _PyErr_SetString(tstate, PyExc_ImportError, "__import__ not found");
+        }
+        return NULL;
+    }
+
+    /* Fast path for not overloaded __import__. */
+    if (import_func == tstate->interp->import_func) {
+        int ilevel = _PyLong_AsInt(level);
+        if (ilevel == -1 && _PyErr_Occurred(tstate)) {
+            return NULL;
+        }
+        res = PyImport_ImportModuleLevelObject(
+                        name,
+                        f->f_globals,
+                        f->f_locals == NULL ? Py_None : f->f_locals,
+                        fromlist,
+                        ilevel);
+        return res;
+    }
+
+    Py_INCREF(import_func);
+
+    stack[0] = name;
+    stack[1] = f->f_globals;
+    stack[2] = f->f_locals == NULL ? Py_None : f->f_locals;
+    stack[3] = fromlist;
+    stack[4] = level;
+    res = _PyObject_FastCall(import_func, stack, 5);
+    Py_DECREF(import_func);
+    return res;
+}
+```
+
+In English, it reads like this:
+
+1. Look up the `__import__()` function in the `builtins` module.
+2. If the `__import__()` function is the same thing as `tstate->interp->import_func`, then call `PyImport_ImportModuleLevelObject()`. 
+3. Otherwise, call `__import__()`.
+
+The [`builtins.__import__()`](https://docs.python.org/3/library/functions.html#__import__) function is the function that implements the logic of the import machinery. Its default implementation calls `PyImport_ImportModuleLevelObject()`, and the algorithm above also calls this function in step 2. It takes a shortcut. Why doesn't it always take a shortuct? It's because Python allows us to set `builtins.__import__()` to a custom function. To know whether `builtins.__import__()` was overridden, Python saves the default implementation in `tstate->interp->import_func`.
+
+
 
