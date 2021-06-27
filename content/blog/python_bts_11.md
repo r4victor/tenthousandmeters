@@ -79,7 +79,17 @@ True
 
 When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file as a script, it first creates a special module called `'__main__'` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the current module.
 
-Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's see now see what Python does when it imports modules.
+Some modules can have submodules. That's why we can write statements like
+
+```python
+import a.b.c
+```
+
+In this case, Python first imports the module `a`, then the module `a.b` and then the module `a.b.c`. It assigns the module object of the module `a` to the variable `a`, so we can access the `a.b` module simply as the attribute of `a` and `a.b.c` as the attribute of `a.b`.
+
+A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. We'll see how it's set and used later on.
+
+Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's now see how Python imports modules.
 
 ## Desugaring the import statement
 
@@ -243,4 +253,50 @@ What to do with these arguments is up to a particular implementation of `__impor
 Before we see how `importlib.__import__()` works, let's express various forms of the `import` statement via `__import__()` as we did for `import m`. This way, we'll get rid of any remaining magic and understand what values the arguments to `__import__()` can take. It won't take that long. I'll omit the intermidiate steps of bytecode analysis this time.
 
 ## Various forms of the import statement
+
+### importing submodules
+
+We've seen that the `import m` statement is equivalent to this piece of code:
+
+```python
+m = __import__('m', globals(), locals(), None, 0)
+```
+
+But how does `__import__()` get called when we import submodules? Let's see. The `import a.b.c` statement compiles to the following bytecode:
+
+```text
+$ echo "import a.b.c" | python -m dis
+  1           0 LOAD_CONST               0 (0)
+              2 LOAD_CONST               1 (None)
+              4 IMPORT_NAME              0 (a.b.c)
+              6 STORE_NAME               1 (a)
+...
+```
+
+Thus, it's equivalent to the following code:
+
+```python
+a = __import__('a.b.c', globals(), locals(), None, 0)
+```
+
+Note that the arguments to ` __import__()` are passed in the same way as before. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we would expect, `importlib.__import__()` returns the top-level module in this case.
+
+### from <> import <>
+
+This statement:
+
+```python
+from a import f, g
+```
+
+is equivalent to:
+
+```python
+a = __import__('a', globals(), locals(), ('f', 'g'), 0)
+f = a.f
+g = a.g
+del a
+```
+
+### relative imports
 
