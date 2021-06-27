@@ -10,7 +10,7 @@ The goal of this post is to get the full picture of the Python import system and
 
 The job of the import system is to import modules, but what is a module? We apply the term "module" to a number of different things including Python files, directories and built-in modules written in C. So the best we can do is to say that a **module** is anything that Python considers a module. We'll see what the full list includes in the course of this post.
 
-When Python imports a module, it creates a **module object**. Consider the simplest form of the import statement:
+When Python imports a module, it creates a **module object**. Consider the simplest form of the `import` statement:
 
 ```python
 import m
@@ -202,25 +202,25 @@ builtin___import__(PyObject *self, PyObject *args, PyObject *kwds)
 
 And the algorithm above also calls `PyImport_ImportModuleLevelObject()` in step 2. That is, it takes a shortcut. Why doesn't it always call `PyImport_ImportModuleLevelObject()` directly? This is because Python allows us to set `builtins.__import__()` to a custom function. If we do so, the algorithm can't take the shortcut. To know whether `builtins.__import__()` was overridden or not, the default implementation is stored in `tstate->interp->import_func`.
 
-People rarely override `builtins.__import__()`. Logging and debugging are the only real reasons to do that because the default implementation already provides powerfull mechanisms for customization. So, in the rest of this article, we'll be discussing only the default implementation of `builtins.__import__()`.
+People rarely override `builtins.__import__()`. Logging and debugging are the only real reasons to do that because the default implementation already provides powerfull mechanisms for customization. We'll be discussing the default implementation only.
 
 As we've seen, `builtins.__import__()` calls `PyImport_ImportModuleLevelObject()`, so we should proceed by studying this function. But we have a better option. You see, the most of the import system is implemented not in C but in Python in the [`importlib`](https://docs.python.org/3/library/importlib.html) standard module. Some of the functions are ported to C for performance reasons, and `PyImport_ImportModuleLevelObject()` is just a C port of the `importlib.__import__()` function. To understand what `PyImport_ImportModuleLevelObject()` does, we can study `importlib.__import__()`. This makes sense if you find Python code more readable, which I do.
 
-Let's summarize what we've learned in this section. To execute an import statement, the compiler produces the `IMPORT_NAME` bytecode instruction. This instruction calls `builtins.__import__()` or `PyImport_ImportModuleLevelObject()` if `builtins.__import__()` is not overridden. And calling the C `PyImport_ImportModuleLevelObject()` function is the same thing as calling the Python `importlib.__import__()` function. Basically, you can think that `__import__()` is set to `importlib.__import__()`.
+Let's summarize what we've learned in this section. To execute an import statement, the compiler produces the `IMPORT_NAME` bytecode instruction. This instruction calls `builtins.__import__()` or `PyImport_ImportModuleLevelObject()` if `builtins.__import__()` is not overridden. And calling the C `PyImport_ImportModuleLevelObject()` function is the same thing as calling the Python `importlib.__import__()` function. In other words, we can think that `__import__()` is set to `importlib.__import__()` by default.
 
-The signature of `__import__()` is this:
+Finally, we conclude that a simple import statement like `import m` is essentially equivalent to this call:
+
+```python
+m = __import__('m', globals(), locals(), None, 0)
+```
+
+the signature of `__import__()` being the following:
 
 ```python
 def __import__(name, globals=None, locals=None, fromlist=(), level=0):
 ```
 
-We've seen that a simple import statement like `import m` is essentially equivalent to the following call:
-
-```python
-m = __import__('m', globals(), None, None, 0)
-```
-
-But what do the arguments to `__import__()` mean? The docstring of `importlib.__import__()` explains how the default implementation iterprets them:
+That's nice, but what do the arguments to `__import__()` mean? The docstring of `importlib.__import__()` explains how the default implementation interprets them:
 
 ```python
 def __import__(name, globals=None, locals=None, fromlist=(), level=0):
@@ -235,4 +235,12 @@ def __import__(name, globals=None, locals=None, fromlist=(), level=0):
 
     """
 ```
+
+There are multiple forms of the `import` statement, and they all work by calling `__import__()`. The difference between them is what they do before and after the call and how they make the call. The `from <> import <>` statements, for example, pass non-empty `fromlist`; relative imports pass non-zero `level`; and all froms of `import` pass global and local variables as `globals` and `locals` respectively.
+
+What to do with these arguments is up to a particular implementation of `__import__()`. The default implementation, for example, ignores `locals` completely and uses `globals` only for relative imports. A custom implementation may use the arguments in a different way, but we won't speculate on that.
+
+Before we see how `importlib.__import__()` works, let's express various forms of the `import` statement via `__import__()` as we did for `import m`. This way, we'll get rid of any remaining magic and understand what values the arguments to `__import__()` can take. It won't take that long. I'll omit the intermidiate steps of bytecode analysis this time.
+
+## Various forms of the import statement
 
