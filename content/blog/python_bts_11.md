@@ -6,9 +6,7 @@ If you ask me to name the most misunderstood feature of Python, I will answer wi
 
 The goal of this post is to get the full picture of the Python import system and understand the reasoning behind its design. We'll see what exactly happens when Python executes an import statement, and this, I hope, will help you solve the import problems much more effectively or avoid them altogether. Let's go!
 
-## The basics of the import system
-
-### Modules and module objects
+## Modules and module objects
 
 We all know that a simple import statement like this:
 
@@ -81,7 +79,7 @@ True
 
 The current module acts as a namespace for the execution of Python code. When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file as a script, it first creates a special module called `"__main__"` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the **current module**. 
 
-### Submodules and packages
+## Submodules and packages
 
 Some modules can have submodules. That's why we can write statements like this:
 
@@ -93,9 +91,9 @@ Here, Python first imports the module `"a"`, then the module `"a.b"` and then th
 
 A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. We'll see how it's set and used later on.
 
-###Importing from modules
+## Importing from modules
 
-We can also import things from modules with the `from <> import <>` statement:
+We can also import things *from* modules with the `from <> import <>` statement:
 
 ```python
 from module import func, Class, submodule
@@ -117,7 +115,7 @@ del module
 
 When Python sees that a module doesn't have the specified attribute, it considers the attribute to be a submodule and tries to import it. Suppose that in our example the module defines `func` and `Class` but not `submodule`, then Python will try to import a module named `"module.submodule"`.
 
-### Relative imports
+## Relative imports
 
 Up until now, we've been telling Python what modules to import by specifying absolute module names. The `from <> import <>` statement allows us to specify relative module names. Here are a few examples:
 
@@ -132,7 +130,56 @@ The constructions like `.` and `..a.b` are relative module names, but what are t
 
 The `__package__` attribute of a module stores the name of the package to which the module belongs. If a module is a package, then the module belongs to itself, and  `__package__` is just the module's name, i.e. `__name__`. If the module is a submodule, then it belongs to the parent module, and `__package__` is set to the parent module's name. Finally, if the module is not a package nor a submodule, then its package is undefined. In this case, `__package__` can be set to an empty string or `None`.
 
-Let's look at some examples
+A relative module name is a module name preceeded by some number of dots. One leading dot represent the current package. So when `__package__` is defined, the following statement:
+
+```python
+from . import a
+```
+
+works as if the dot was replaced with the value of `__package__`.
+
+Each extra dot tells Python to move one level up from `__package__` . So, for example, if `__package__` is set to `"a.b"`, then this statement: 
+
+```
+from .. import d
+```
+
+works as if the dots were replaced with `a`.
+
+
+
+---
+
+To better understand how `__package__` is set, let's look at some examples. Suppose we have a package named `"a"` that has the following structure:
+
+```text
+a/
+	__init__.py
+	b/
+		c.py
+```
+
+If we import the module `"a.b.c"`:
+
+```python
+import a.b.c
+```
+
+Then Python will set `a.__package__` to `"a"` since `a` is a package and it will set `a.b.__package__` to `"a.b"` since `a.b` is a package on its own. It will set `a.b.c.__package__` to `"a.b"` because `a.b.c` is not a package but a submodule of `a.b`. 
+
+---
+
+## Why relative imports fail
+
+Moving outside the package ...
+
+You most commonly see a relative import fail when you use it in a Python file that you run as a script. The is because Python creates the `"__main__"` module to execute a script and sets its `__package__` attribute to `None`. When `__package__` is set to `None`, relative imports don't work. Python simply can't know what the relative imports are relative to.
+
+Another question is why Python sets `__package__` to `None` in this case. ... -m flag
+
+## Running programs as scripts vs. running programs as modules
+
+...
 
 Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's now see how Python imports modules.
 
