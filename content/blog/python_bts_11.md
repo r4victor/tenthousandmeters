@@ -6,17 +6,19 @@ If you ask me to name the most misunderstood feature of Python, I will answer wi
 
 The goal of this post is to get the full picture of the Python import system and understand the reasoning behind its design. We'll see what exactly happens when Python executes an import statement, and this, I hope, will help you solve the import problems much more effectively or avoid them altogether. Let's go!
 
-## Modules and module objects
+## The basics of the import system
 
-The job of the import system is to import modules, but what is a module? We apply the term "module" to a number of different things including Python files, directories and built-in modules written in C. So the best we can do is to say that a **module** is anything that Python considers a module. We'll see what the full list includes in the course of this post.
+### Modules and module objects
 
-When Python imports a module, it creates a **module object**. Consider the simplest form of the `import` statement:
+We all know that a simple import statement like this:
 
 ```python
 import m
 ```
 
-It tells Python to find the module named `"m"`, create and initialize the module object for the module, and assign the module object to the variable `m`. The term "module" is often applied to a module object as well.
+tells Python to import a module named `"m"` and assign the module to the variable `m`. But can you tell what a module is? We apply the term "module" to a number of different things including Python files, directories and built-in modules written in C. So the best thing we can do is to say that a **module** is anything that Python considers a module. We'll see what the full list includes in the course of this post.
+
+When Python imports a module, it creates a **module object**. What the statement `import m` actually does is tell Python to find a module named `"m"`, create and initialize the module object for the module, and assign the module object to the variable `m`. The term "module" is often applied to a module object as well.
 
 Like everything in Python, a module object is a [Python object]({filename}/blog/python_bts_06.md). Its definition can be found in [`Objects/moduleobject.c`](https://github.com/python/cpython/blob/3.9/Objects/moduleobject.c):
 
@@ -61,14 +63,14 @@ A newly created module object is not very interesting but has some special attri
 {'__name__': 'm', '__doc__': None, '__package__': None, '__loader__': None, '__spec__': None}
 ```
 
-Most of these special attributes are mainly used by the import system itself, and we'll later see  how. For now, let's take a look at the `__name__` attribute that is often used to get the name of the current module:
+Most of these special attributes are mainly used by the import system itself. Programmers are most likely to be familiar with the `__name__` attribute. It's often used to get the name of the current module:
 
 ```pycon
 >>> __name__
 '__main__'
 ```
 
-Notice that `__name__` is available as a global variable. This is because the dictionary of global variables is always set to the dictionary of the current module. Here's a proof:
+Notice that `__name__` is available as a global variable. This is because the dictionary of global variables is always set to the dictionary of the current module:
 
 ```pycon
 >>> import sys
@@ -77,17 +79,60 @@ Notice that `__name__` is available as a global variable. This is because the di
 True
 ```
 
-When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file as a script, it first creates a special module called `'__main__'` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the current module.
+The current module acts as a namespace for the execution of Python code. When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file as a script, it first creates a special module called `"__main__"` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the **current module**. 
 
-Some modules can have submodules. That's why we can write statements like
+### Submodules and packages
+
+Some modules can have submodules. That's why we can write statements like this:
 
 ```python
 import a.b.c
 ```
 
-In this case, Python first imports the module `a`, then the module `a.b` and then the module `a.b.c`. It assigns the module object of the module `a` to the variable `a`, so we can access the `a.b` module simply as the attribute of `a` and `a.b.c` as the attribute of `a.b`.
+Here, Python first imports the module `"a"`, then the module `"a.b"` and then the module `"a.b.c"`. It assigns the module object of the module `"a"` to the variable `a`, so we can access the submodules simply as attributes: `a.b` and `a.b.c`.
 
 A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. We'll see how it's set and used later on.
+
+###Importing from modules
+
+We can also import things from modules with the `from <> import <>` statement:
+
+```python
+from module import func, Class, submodule
+```
+
+It tells Python to import a module named `"module"` and assign the specified attributes to the corresponding variables, like so:
+
+```python
+func = module.func
+Class = module.Class
+submodule = module.submodule
+```
+
+Note that the `module` variable is not available after the import as if it was deleted:
+
+```python
+del module
+```
+
+When Python sees that a module doesn't have the specified attribute, it considers the attribute to be a submodule and tries to import it. Suppose that in our example the module defines `func` and `Class` but not `submodule`, then Python will try to import a module named `"module.submodule"`.
+
+### Relative imports
+
+Up until now, we've been telling Python what modules to import by specifying absolute module names. The `from <> import <>` statement allows us to specify relative module names. Here are a few examples:
+
+```python
+from . import a
+from .. import a
+from .a import b
+from ..a.b import c
+```
+
+The constructions like `.` and `..a.b` are relative module names, but what are they relative to? As we said, Python code is executed in the context of the current module whose dictionary acts as a dictionary of global variables. The current module, as any other module, can belong to a package. This package is considered to be the **current package**, and this is what relative module names are relative to.
+
+The `__package__` attribute of a module stores the name of the package to which the module belongs. If a module is a package, then the module belongs to itself, and  `__package__` is just the module's name, i.e. `__name__`. If the module is a submodule, then it belongs to the parent module, and `__package__` is set to the parent module's name. Finally, if the module is not a package nor a submodule, then its package is undefined. In this case, `__package__` can be set to an empty string or `None`.
+
+Let's look at some examples
 
 Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's now see how Python imports modules.
 
@@ -254,7 +299,7 @@ Before we see how `importlib.__import__()` works, let's express various forms of
 
 ## Various forms of the import statement
 
-### importing submodules
+### Importing submodules
 
 We've seen that the `import m` statement is equivalent to this piece of code:
 
@@ -262,7 +307,7 @@ We've seen that the `import m` statement is equivalent to this piece of code:
 m = __import__('m', globals(), locals(), None, 0)
 ```
 
-But how does `__import__()` get called when we import submodules? Let's see. The `import a.b.c` statement compiles to the following bytecode:
+Importing submodules is not much different. The `import a.b.c` statement compiles to the following bytecode:
 
 ```text
 $ echo "import a.b.c" | python -m dis
@@ -283,20 +328,48 @@ Note that the arguments to ` __import__()` are passed in the same way as before.
 
 ### from <> import <>
 
-This statement:
+The `from m import f, g` statement
 
 ```python
-from a import f, g
+from m import f, g
 ```
 
-is equivalent to:
+```
+$ echo "from m import f, g" | python3 -m dis
+  1           0 LOAD_CONST               0 (0)
+              2 LOAD_CONST               1 (('f', 'g'))
+              4 IMPORT_NAME              0 (m)
+              6 IMPORT_FROM              1 (f)
+              8 STORE_NAME               1 (f)
+             10 IMPORT_FROM              2 (g)
+             12 STORE_NAME               2 (g)
+```
 
 ```python
-a = __import__('a', globals(), locals(), ('f', 'g'), 0)
-f = a.f
-g = a.g
-del a
+m = __import__('m', globals(), locals(), ('f', 'g'), 0)
+f = m.f
+g = m.g
+del m
 ```
 
-### relative imports
+### Relative imports
+
+```python
+from ..a.b import f
+```
+
+```
+$ echo "from ..a.b import f" | python -m dis
+  1           0 LOAD_CONST               0 (2)
+              2 LOAD_CONST               1 (('f',))
+              4 IMPORT_NAME              0 (a.b)
+              6 IMPORT_FROM              1 (f)
+              8 STORE_NAME               1 (f)
+```
+
+```python
+a_dot_b = __import__('a.b', globals(), locals(), ('f'), 2)
+f = a_dot_b.f
+del a_dot_b
+```
 
