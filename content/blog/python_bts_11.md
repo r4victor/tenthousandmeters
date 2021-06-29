@@ -8,17 +8,21 @@ The goal of this post is to get the full picture of the Python import system and
 
 ## Modules and module objects
 
-We all know that a simple import statement like this:
+Consider a simple import statement:
 
 ```python
 import m
 ```
 
-tells Python to import a module named `"m"` and assign the module to the variable `m`. But can you tell what a module is? We apply the term "module" to a number of different things including Python files, directories and built-in modules written in C. So the best thing we can do is to say that a **module** is anything that Python considers a module. We'll see what the full list includes in the course of this post.
+What do you think it does? Intuitively, it tells Python to import a module named `"m"` and assign the module to the variable `m`. But this explanation leaves unclear what a module is and what the variable `m` is set to exactly. What the statement `import m` actually does is tell Python to find a module named `"m"`, create a module object for that module, and assign the module object to the variable `m`. 
 
-When Python imports a module, it creates a **module object**. What the statement `import m` actually does is tell Python to find a module named `"m"`, create and initialize the module object for the module, and assign the module object to the variable `m`. The term "module" is often applied to a module object as well.
+A **module** is anything that Python considers a module and knows how to create a module object for. This includes things like Python files, directories and built-in modules written in C. We'll discuss the full list a bit later.
 
-Like everything in Python, a module object is a [Python object]({filename}/blog/python_bts_06.md). Its definition can be found in [`Objects/moduleobject.c`](https://github.com/python/cpython/blob/3.9/Objects/moduleobject.c):
+The primary reason to import any module is to get an access to the functions, classes, constants and other names that the module defines. These names must be stored somewhere, and this is what module objects are for. A **module object** is a Python object that acts as a namespace for the module's names. The names are stored in the module object's dictionary (available as `m.__dict__`), so we can access them as attributes. 
+
+Beware that the term "module" is often applied to module objects as well.
+
+If you wonder how module objects are implemented, here's the definition from [`Objects/moduleobject.c`](https://github.com/python/cpython/blob/3.9/Objects/moduleobject.c):
 
 ```C
 typedef struct {
@@ -31,16 +35,15 @@ typedef struct {
 } PyModuleObject;
 ```
 
-The only field of a module object that we should care about is `md_dict`. It's the dictionary of a module object (available as `m.__dict__`), and it's where the attributes of a module object are stored. Typical attributes of a module object are functions, classes, constants and other modules. They are the reason to import a module in the first place, and a module object is just a namespace for them.
+The `md_dict` field stores the module's dictionary. Other fields are not really important for our discussion.
 
-To see that there is nothing magical about module objects, let's create one. We create Python objects by calling their types like `MyClass()` or `set()`. The type of module objects is called `PyModule_Type` in the C code but it's not available in Python as a built-in. Fortunately, such "unavailable" types can be found in the [`types`](https://docs.python.org/3/library/types.html) standard module:
+To see that there is nothing magical about module objects, let's create one. We usually create objects by calling their types, like `MyClass()` or `set()`. The type of module objects is `PyModule_Type` in the C code but it's not available in Python as a built-in. Fortunately, such "unavailable" types can be found in the [`types`](https://docs.python.org/3/library/types.html) standard module:
 
 ```pycon
 $ python -q
 >>> from types import ModuleType
->>> m = ModuleType('m')
->>> m
-<module 'm'>
+>>> ModuleType
+<class 'module'>
 ```
 
 Another way to get `ModuleType` in Python is to import some module and then call `type()` on the module object returned:
@@ -52,7 +55,15 @@ Another way to get `ModuleType` in Python is to import some module and then call
 <class 'module'>
 ```
 
-And this is exactly how the `types` module defines `ModuleType`.
+This is, by the way, how the `types` module defines `ModuleType`.
+
+Finally, we create a module object:
+
+```pycon
+>>> m = ModuleType('m')
+>>> m
+<module 'm'>
+```
 
 A newly created module object is not very interesting but has some special attributes preinitialized:
 
@@ -78,6 +89,22 @@ True
 ```
 
 The current module acts as a namespace for the execution of Python code. When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file as a script, it first creates a special module called `"__main__"` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the **current module**. 
+
+## Different kinds of modules
+
+By default, Python recognizes the following things as modules:
+
+1. Built-in modules.
+2. Frozen modules.
+3. C extensions.
+4. Python files.
+5. Directories.
+
+Built-in modules are a part of the `python` executable. They are written in C and typically located in the [`Modules/`](https://github.com/python/cpython/tree/3.9/Modules) directory. The `array`, `itertools`, `math` and `sys` modules are all examples of built-in modules. 
+
+Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is compiled to a code object and then the binary representation of the code object is incorporated into the executable. The `_frozen_importlib` and `_frozen_importlib_external` are rare examples of frozen modules. They are the modules that implement the core of the import system. Python freezes them because it cannot import them as other Python files.
+
+C extensions allow us to write our own modules in C or C++ via the [Python/C API](https://docs.python.org/3/c-api/index.html). They are shared libraries (.so) that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). The primary reason to write C extensions is performance. Computational intensive libraries, such as `numpy`, hide a bunch of C extensions under the hood.
 
 ## Submodules and packages
 
