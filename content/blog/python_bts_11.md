@@ -102,11 +102,104 @@ By default, Python recognizes the following things as modules:
 
 Built-in modules are a part of the `python` executable. They are written in C and typically located in the [`Modules/`](https://github.com/python/cpython/tree/3.9/Modules) directory. The `array`, `itertools`, `math` and `sys` modules are all examples of built-in modules. 
 
-Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is compiled to a code object and then the binary representation of the code object is incorporated into the executable. The `_frozen_importlib` and `_frozen_importlib_external` are rare examples of frozen modules. They are the modules that implement the core of the import system. Python freezes them because it cannot import them as other Python files.
+Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is compiled to a code object and then the binary representation of the code object is incorporated into the executable. The `_frozen_importlib` and `_frozen_importlib_external` modules are rare examples of frozen modules. They are the modules that implement the core of the import system. Python freezes them because it cannot import them as other Python files.
 
-C extensions allow us to write our own modules in C or C++ via the [Python/C API](https://docs.python.org/3/c-api/index.html). They are shared libraries (.so) that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). The primary reason to write C extensions is performance. Computational intensive libraries, such as `numpy`, hide a bunch of C extensions under the hood.
+C extensions allow us to write our own modules in C or C++ via the [Python/C API](https://docs.python.org/3/c-api/index.html). They are [shared libraries](https://stackoverflow.com/questions/9688200/difference-between-shared-objects-so-static-libraries-a-and-dlls-so) (.so) that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). The primary reason to write C extensions is performance. Computational intensive libraries, such as `numpy`, hide a bunch of C extensions under the hood.
 
 ## Submodules and packages
+
+We tell Python what modules to import by specifying module names. If module names were limited to simple identifiers like `"mymodule"` or `"utils"`, then all names must have been unique, and we would have to think very hard every time we give a new file a name. For this reason, Python allows modules to have submodules and module names to contain dots.
+
+When Python executes this statements:
+
+```python
+import a.b
+```
+
+it first imports the module `"a"` and then the submodule `"a.b"`. It adds the submodule to the module's dictionary and assigns the module to the variable `a`, so we can access the submodule as a module's attribute (`a.b`).
+
+A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. When Python imports a top-level module, it looks up the appropriately named Python file, directory and C extension in the directories listed in `sys.path`. But when it imports a submodule, it uses the `__path__` attribute of the parent module instead of `sys.path`.
+
+### Regular packages
+
+Directories are the most common way to organize modules into packages. If a directory contains a `__init__.py` file, it's considered to be a **regular package**. When Python imports such a directory, it executes the `__init__.py` file, so the names defined there become the attributes of the module.
+
+The `__init__.py` file is typically left empty or contains package-related attributes such as `__doc__` and `__version__`. It can also be used to decouple the public API of a package from its internal implementation. Suppose you develop a library with the following structure:
+
+```text
+mylibrary/
+	__init__.py
+	module1.py
+	module2.py
+```
+
+And you want to provide the users of your library with two functions: `func1()` defined in `module1.py` and `func2()` defined in `module1.py`. If you left `__init__.py` empty, then your users must specify the submodules to import the functions:
+
+```python
+from mylibrary.module1 import func1
+from mylibrary.module2 import func2
+```
+
+It may be something you want, but you may also want to allow the users to import the functions like this:
+
+```
+from mylibrary import func1, func2
+```
+
+So you import `func1()` and `func2()` in `__init__.py`:
+
+```python
+# mylibrary/__init__.py
+from mylibrary.module1 import func1
+from mylibrary.module2 import func2
+```
+
+And the users are happy.
+
+### Namespace packages
+
+Before version 3.3, Python had only regular packages. Directories without `__init__.py` were not considered packages at all. And this was a problem because [people didn't like](https://mail.python.org/pipermail/python-dev/2006-April/064400.html) to create empty `__init__.py` files.
+
+The problem was solved with the introduction of **namespace packages** in [PEP 420](https://www.python.org/dev/peps/pep-0420/). But namespace packages solved another problem as well. They allowed developers to place contents of a package across multiple locations.
+
+If you have the following directory structure:
+
+```text
+mylibs/
+	company_name/
+		package1/...
+morelibs/
+	company_name/
+		package2/...
+```
+
+And both `mylibs` and `morelibs` are in `sys.path`, then you can import both `package1` and `package2` like this:
+
+```pycon
+>>> import company_name.package1
+>>> import company_name.package2
+```
+
+This is because `company_name` is a namespace package that contains two locations:
+
+```pycon
+>>> company_name.__path__
+_NamespacePath(['/morelibs/company_name', '/mylibs/company_name'])
+```
+
+How does it work? When Python traverses path entries on the path during the module search, it remebers directories without `__init__.py` that match the module's name. If after traversing all the entries, it couldn't find a regular package, a Python file or a C extension, it creates a module object whose `__path__` contains the memorized directories.
+
+The initial idea of requiring `__init__.py` was to prevent directories on the path (`sys.path` or `__path__`) named like `string` or `site` from shadowing standard modules. Namespace package do not shadow other modules because they have lower precedence during the module search.
+
+
+
+
+
+---
+
+https://www.python.org/dev/peps/pep-0402/
+
+we specify name; why modules have submodules; what the statement does; examples – file and directory; packages; regular packages; `__init__.py` namespace packages.
 
 Some modules can have submodules. That's why we can write statements like this:
 
