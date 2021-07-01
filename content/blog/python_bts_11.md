@@ -133,7 +133,7 @@ mylibrary/
 	module2.py
 ```
 
-And you want to provide the users of your library with two functions: `func1()` defined in `module1.py` and `func2()` defined in `module1.py`. If you left `__init__.py` empty, then your users must specify the submodules to import the functions:
+And you want to provide the users of your library with two functions: `func1()` defined in `module1.py` and `func2()` defined in `module2.py`. If you left `__init__.py` empty, then the users must specify the submodules to import the functions:
 
 ```python
 from mylibrary.module1 import func1
@@ -187,39 +187,21 @@ This is because `company_name` is a namespace package that contains two location
 _NamespacePath(['/morelibs/company_name', '/mylibs/company_name'])
 ```
 
-How does it work? When Python traverses path entries on the path during the module search, it remebers directories without `__init__.py` that match the module's name. If after traversing all the entries, it couldn't find a regular package, a Python file or a C extension, it creates a module object whose `__path__` contains the memorized directories.
+How does it work? When Python traverses path entries on the path during the module search, it remebers the directories without `__init__.py` that match the module's name. If after traversing all the entries, it couldn't find a regular package, a Python file or a C extension, it creates a module object whose `__path__` contains the memorized directories.
 
 The initial idea of requiring `__init__.py` was to prevent directories on the path (`sys.path` or `__path__`) named like `string` or `site` from shadowing standard modules. Namespace package do not shadow other modules because they have lower precedence during the module search.
 
 
 
-
-
----
-
-https://www.python.org/dev/peps/pep-0402/
-
-we specify name; why modules have submodules; what the statement does; examples – file and directory; packages; regular packages; `__init__.py` namespace packages.
-
-Some modules can have submodules. That's why we can write statements like this:
-
-```python
-import a.b.c
-```
-
-Here, Python first imports the module `"a"`, then the module `"a.b"` and then the module `"a.b.c"`. It assigns the module object of the module `"a"` to the variable `a`, so we can access the submodules simply as attributes: `a.b` and `a.b.c`.
-
-A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. We'll see how it's set and used later on.
-
 ## Importing from modules
 
-We can also import things *from* modules with the `from <> import <>` statement:
+Besides importing modules, we can also import module attributes using a `from <> import <>` statement like this:
 
 ```python
 from module import func, Class, submodule
 ```
 
-It tells Python to import a module named `"module"` and assign the specified attributes to the corresponding variables, like so:
+It tells Python to import a module named `"module"` and assign the specified attributes to the corresponding variables:
 
 ```python
 func = module.func
@@ -233,11 +215,11 @@ Note that the `module` variable is not available after the import as if it was d
 del module
 ```
 
-When Python sees that a module doesn't have the specified attribute, it considers the attribute to be a submodule and tries to import it. Suppose that in our example the module defines `func` and `Class` but not `submodule`, then Python will try to import a module named `"module.submodule"`.
+When Python sees that a module doesn't have a specified attribute, it considers the attribute to be a submodule and tries to import it. If, in our example, the module defines `func` and `Class` but not `submodule`, then Python will try to import `"module.submodule"`.
 
 ## Relative imports
 
-Up until now, we've been telling Python what modules to import by specifying absolute module names. The `from <> import <>` statement allows us to specify relative module names. Here are a few examples:
+Up until now we've been telling Python what modules to import by specifying absolute module names. The `from <> import <>` statement allows us to specify relative module names. Here are a few examples:
 
 ```python
 from . import a
@@ -246,11 +228,11 @@ from .a import b
 from ..a.b import c
 ```
 
-The constructions like `.` and `..a.b` are relative module names, but what are they relative to? As we said, Python code is executed in the context of the current module whose dictionary acts as a dictionary of global variables. The current module, as any other module, can belong to a package. This package is considered to be the **current package**, and this is what relative module names are relative to.
+The constructions like `.` and `..a.b` are relative module names, but what are they relative to? As we said, a Python file is executed in the context of the current module whose dictionary acts as a dictionary of global variables. The current module, as any other module, can belong to a package. This package is considered to be the **current package**, and this is what relative module names are relative to.
 
-The `__package__` attribute of a module stores the name of the package to which the module belongs. If a module is a package, then the module belongs to itself, and  `__package__` is just the module's name, i.e. `__name__`. If the module is a submodule, then it belongs to the parent module, and `__package__` is set to the parent module's name. Finally, if the module is not a package nor a submodule, then its package is undefined. In this case, `__package__` can be set to an empty string or `None`.
+The `__package__` attribute of a module stores the name of the package to which the module belongs. If a module is a package, then the module belongs to itself, and  `__package__` is just the module's name (`__name__`). If the module is a submodule, then it belongs to the parent module, and `__package__` is set to the parent module's name. Finally, if the module is not a package nor a submodule, then its package is undefined. In this case, `__package__` can be set to an empty string or `None`.
 
-A relative module name is a module name preceeded by some number of dots. One leading dot represent the current package. So when `__package__` is defined, the following statement:
+A relative module name is a module name preceeded by some number of dots. One leading dot represents the current package. So, when `__package__` is defined, the following statement:
 
 ```python
 from . import a
@@ -258,7 +240,7 @@ from . import a
 
 works as if the dot was replaced with the value of `__package__`.
 
-Each extra dot tells Python to move one level up from `__package__` . So, for example, if `__package__` is set to `"a.b"`, then this statement: 
+Each extra dot tells Python to move one level up from `__package__` . If `__package__` is set to `"a.b"`, then this statement: 
 
 ```
 from .. import d
@@ -266,42 +248,171 @@ from .. import d
 
 works as if the dots were replaced with `a`.
 
+You cannot move outside the top-level package. If you try this:
 
+```
+from ... import e
+```
 
----
+Python will throw an error:
 
-To better understand how `__package__` is set, let's look at some examples. Suppose we have a package named `"a"` that has the following structure:
+````text
+ImportError: attempted relative import beyond top-level package
+````
+
+This is because Python does not move through the file system to resole relative imports. It just takes the value of `__package__`, strips some suffix and appends the new one to get the module name.
+
+Obviously, relative imports break when `__package__` is not defined at all. In this case, you get the following error:
 
 ```text
-a/
-	__init__.py
-	b/
-		c.py
+ImportError: attempted relative import with no known parent package
 ```
 
-If we import the module `"a.b.c"`:
+You most commonly see it when you run a Python file with relative imports as a script. This is because the code is executed in the `"__main__"` module whose `__package__` attribute is set to `None`. Note that "parent package" is the term that Python uses to denote the current package.
+
+Python doesn't forget to set `__package__` correctly, but we may. When `__package__` is `None`, the current package is calculated as `__name__` for packages and `self.name.rpartition('.')[0]` for non-packages. The latter is basically a module name without the part after the last dot or an empty string if the name doesn't contain dots.
+
+## Desugaring the import statement
+
+If we desugar any import statement, we'll see that it eventually calls the built-in [`__import__()`](https://docs.python.org/3/library/functions.html#__import__) function to import modules. This function takes the module's name and a bunch of other parameters, finds the module and returns a module object for it. At least, this is what it's supposed to do.
+
+Python allows us to set `__import__()` to a custom function, so we can change the import process completely. Here's a change that just breaks everything:
+
+```
+>>> import builtins
+>>> builtins.__import__ = None
+>>> import math
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+TypeError: 'NoneType' object is not callable
+```
+
+However, you don't really see people overriding `__import__()` for reasons other than logging or debugging. This is because the default implementation already provides powerfull mechanisms for customization.
+
+The default implementation of `__import__()` is the `importlib.__import__()` function. Well, not quite. You see, `importlib` is a standard module that implements the core of the import system. It's written in Python because the import process involves path handling and other things that you would prefer to do in Python rather than in C. But some functions of `importlib` are ported to C for performance reasons. And default `__import__()` actually calls a C port of `importlib.__import__()`.
+
+Let's now see how various import statements are expressed via `__import__()` so that afterwards we can focus solely on this function.
+
+How can we find out what a Python statement does? Recall that a piece of Python code is executed in two steps:
+
+1. The [compiler]({filename}/blog/python_bts_02.md) compiles the code to bytecode.
+2. The [VM]({filename}/blog/python_bts_01.md) executes the bytecode.
+
+So to see what a statement does, we can look at the bytecode produced for it and then find out what each bytecode instruction does by looking at the [evaluation loop]({filename}/blog/python_bts_04.md) in [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c).
+
+To get the bytecode, we use the [`dis`](https://docs.python.org/3/library/dis.html) standard module:
+
+```text
+$ echo "import m" | python -m dis
+  1           0 LOAD_CONST               0 (0)
+              2 LOAD_CONST               1 (None)
+              4 IMPORT_NAME              0 (m)
+              6 STORE_NAME               0 (m)
+...
+```
+
+The first [`LOAD_CONST`](https://docs.python.org/3/library/dis.html#opcode-LOAD_CONST) instruction pushes `0` onto the value stack. The second `LOAD_CONST` pushes `None`. Then the `IMPORT_NAME` instruction does something we'll look into in a moment. Finally, [`STORE_NAME`](https://docs.python.org/3/library/dis.html#opcode-STORE_NAME) assigns the value on top of the value stack to the variable `m`.
+
+The code that executes the `IMPORT_NAME` instruction looks as follows:
+
+```C
+case TARGET(IMPORT_NAME): {
+    PyObject *name = GETITEM(names, oparg);
+    PyObject *fromlist = POP();
+    PyObject *level = TOP();
+    PyObject *res;
+    res = import_name(tstate, f, name, fromlist, level);
+    Py_DECREF(level);
+    Py_DECREF(fromlist);
+    SET_TOP(res);
+    if (res == NULL)
+        goto error;
+    DISPATCH();
+}
+```
+
+The `import_name()` function calls `__import__()` to do the work. But if `__import__()` wasn't overriden, it takes a shortcut and calls the C port of `importlib.__import__()` called `PyImport_ImportModuleLevelObject()`. Here's `import_name()` for the sake of completeness:
+
+```C
+static PyObject *
+import_name(PyThreadState *tstate, PyFrameObject *f,
+            PyObject *name, PyObject *fromlist, PyObject *level)
+{
+    _Py_IDENTIFIER(__import__);
+    PyObject *import_func, *res;
+    PyObject* stack[5];
+
+    import_func = _PyDict_GetItemIdWithError(f->f_builtins, &PyId___import__);
+    if (import_func == NULL) {
+        if (!_PyErr_Occurred(tstate)) {
+            _PyErr_SetString(tstate, PyExc_ImportError, "__import__ not found");
+        }
+        return NULL;
+    }
+
+    /* Fast path for not overloaded __import__. */
+    if (import_func == tstate->interp->import_func) {
+        int ilevel = _PyLong_AsInt(level);
+        if (ilevel == -1 && _PyErr_Occurred(tstate)) {
+            return NULL;
+        }
+        res = PyImport_ImportModuleLevelObject(
+                        name,
+                        f->f_globals,
+                        f->f_locals == NULL ? Py_None : f->f_locals,
+                        fromlist,
+                        ilevel);
+        return res;
+    }
+
+    Py_INCREF(import_func);
+
+    stack[0] = name;
+    stack[1] = f->f_globals;
+    stack[2] = f->f_locals == NULL ? Py_None : f->f_locals;
+    stack[3] = fromlist;
+    stack[4] = level;
+    res = _PyObject_FastCall(import_func, stack, 5);
+    Py_DECREF(import_func);
+    return res;
+}
+```
+
+If you analyze how the arguments are prepared and passed, you'll be able to conclude that this statement:
+
+```
+import m
+```
+
+is actually equivalent to this code:
 
 ```python
-import a.b.c
+m = __import__("m", globals(), locals(), None, 0)
 ```
-
-Then Python will set `a.__package__` to `"a"` since `a` is a package and it will set `a.b.__package__` to `"a.b"` since `a.b` is a package on its own. It will set `a.b.c.__package__` to `"a.b"` because `a.b.c` is not a package but a submodule of `a.b`. 
 
 ---
 
-## Why relative imports fail
 
-Moving outside the package ...
 
-You most commonly see a relative import fail when you use it in a Python file that you run as a script. The is because Python creates the `"__main__"` module to execute a script and sets its `__package__` attribute to `None`. When `__package__` is set to `None`, relative imports don't work. Python simply can't know what the relative imports are relative to.
+The signature of `__import__()` being the following:
 
-Another question is why Python sets `__package__` to `None` in this case. ... -m flag
+```python
+def __import__(name, globals=None, locals=None, fromlist=(), level=0):
+    """Import a module.
 
-## Running programs as scripts vs. running programs as modules
+    The 'globals' argument is used to infer where the import is occurring from
+    to handle relative imports. The 'locals' argument is ignored. The
+    'fromlist' argument specifies what should exist as attributes on the module
+    being imported (e.g. ``from module import <fromlist>``).  The 'level'
+    argument represents the package location to import from in a relative
+    import (e.g. ``from ..pkg import mod`` would have a 'level' of 2).
 
-...
+    """
+```
 
-Okay. We can always access attributes defined in the current module and we can import other modules to access their attributes. Let's now see how Python imports modules.
+The job of `__import__()` is to find the module specified by `name` and return a module object for that module. 
+
+ Global variables are passed so that `__import__()` knows about `__package__` and other attributes of the current module. There are used for relative imports . Local variables are totally ignored by the default implementation.
 
 ## Desugaring the import statement
 
