@@ -293,6 +293,8 @@ The default implementation of `__import__()` is the `importlib.__import__()` fun
 
 Let's now see how various import statements are expressed via `__import__()` so that afterwards we can focus solely on this function.
 
+### Simple imports
+
 How can we find out what a Python statement does? Recall that a piece of Python code is executed in two steps:
 
 1. The [compiler]({filename}/blog/python_bts_02.md) compiles the code to bytecode.
@@ -390,11 +392,7 @@ is actually equivalent to this code:
 m = __import__("m", globals(), locals(), None, 0)
 ```
 
----
-
-
-
-The signature of `__import__()` being the following:
+The meaning of the arguments is explained in the docsting of `importlib.__import__()`:
 
 ```python
 def __import__(name, globals=None, locals=None, fromlist=(), level=0):
@@ -410,185 +408,22 @@ def __import__(name, globals=None, locals=None, fromlist=(), level=0):
     """
 ```
 
-The job of `__import__()` is to find the module specified by `name` and return a module object for that module. 
+As we've said, all import statements eventually call `__import__()` to import modules. They only differ in what they do before and after the call and how they make the call. The `from <> import <>` statements, for example, pass non-empty `fromlist`, and relative imports pass non-zero `level`.
 
- Global variables are passed so that `__import__()` knows about `__package__` and other attributes of the current module. There are used for relative imports . Local variables are totally ignored by the default implementation.
-
-## Desugaring the import statement
-
-Recall that a piece of Python code is executed in two steps:
-
-1. The [compiler]({filename}/blog/python_bts_02.md) compiles the code to bytecode.
-2. The [VM]({filename}/blog/python_bts_01.md) executes the bytecode.
-
-To see how an import statement gets executed, we can look at the bytecode produced for it. As always, the [dis](https://docs.python.org/3/library/dis.html) standard module can help us with this:
-
-```text
-$ echo "import m" | python3 -m dis
-  1           0 LOAD_CONST               0 (0)
-              2 LOAD_CONST               1 (None)
-              4 IMPORT_NAME              0 (m)
-              6 STORE_NAME               0 (m)
-...
-```
-
-The first [`LOAD_CONST`](https://docs.python.org/3/library/dis.html#opcode-LOAD_CONST) instruction pushes `0` onto the value stack. The second `LOAD_CONST` pushes `None`. Then the `IMPORT_NAME` opcode does something that we'll look into in a moment. Finally, [`STORE_NAME`](https://docs.python.org/3/library/dis.html#opcode-STORE_NAME) assigns the value on top of the value stack to the variable `m`.
-
-The logic of opcode execution is implemented in the [evaluation loop]({filename}/blog/python_bts_04.md) in [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c). Here's the code that executes `IMPORT_NAME`:
-
-```C
-case TARGET(IMPORT_NAME): {
-    PyObject *name = GETITEM(names, oparg);
-    PyObject *fromlist = POP();
-    PyObject *level = TOP();
-    PyObject *res;
-    res = import_name(tstate, f, name, fromlist, level);
-    Py_DECREF(level);
-    Py_DECREF(fromlist);
-    SET_TOP(res);
-    if (res == NULL)
-        goto error;
-    DISPATCH();
-}
-```
-
-So, what `IMPORT_NAME` does is call the `import_name()` function and leaves the result of the call on top of the value stack. The constants `0` and `None` that were pushed onto the stack are used as the `level` and `fromlist` arguments. And the argument to `IMPORT_NAME` specifies the name of the module.
-
-The `import_name()` function is implemented as follows:
-
-```C
-static PyObject *
-import_name(PyThreadState *tstate, PyFrameObject *f,
-            PyObject *name, PyObject *fromlist, PyObject *level)
-{
-    _Py_IDENTIFIER(__import__);
-    PyObject *import_func, *res;
-    PyObject* stack[5];
-
-    import_func = _PyDict_GetItemIdWithError(f->f_builtins, &PyId___import__);
-    if (import_func == NULL) {
-        if (!_PyErr_Occurred(tstate)) {
-            _PyErr_SetString(tstate, PyExc_ImportError, "__import__ not found");
-        }
-        return NULL;
-    }
-
-    /* Fast path for not overloaded __import__. */
-    if (import_func == tstate->interp->import_func) {
-        int ilevel = _PyLong_AsInt(level);
-        if (ilevel == -1 && _PyErr_Occurred(tstate)) {
-            return NULL;
-        }
-        res = PyImport_ImportModuleLevelObject(
-                        name,
-                        f->f_globals,
-                        f->f_locals == NULL ? Py_None : f->f_locals,
-                        fromlist,
-                        ilevel);
-        return res;
-    }
-
-    Py_INCREF(import_func);
-
-    stack[0] = name;
-    stack[1] = f->f_globals;
-    stack[2] = f->f_locals == NULL ? Py_None : f->f_locals;
-    stack[3] = fromlist;
-    stack[4] = level;
-    res = _PyObject_FastCall(import_func, stack, 5);
-    Py_DECREF(import_func);
-    return res;
-}
-```
-
-In English, it reads like this:
-
-1. Look up the `__import__()` function in the `builtins` module.
-2. If the `__import__()` function is the same thing as `tstate->interp->import_func`, then call `PyImport_ImportModuleLevelObject()`. 
-3. Otherwise, call `__import__()`.
-
-The [`builtins.__import__()`](https://docs.python.org/3/library/functions.html#__import__) function is the function that implements the logic of the import machinery. Since it's a part of the `builtins` module, it's also available simply as `__import__`:
-
-```pycon
->>> __import__
-<built-in function __import__>
-```
-
-It calls `PyImport_ImportModuleLevelObject()` to do the actual work:
-
-```C
-static PyObject *
-builtin___import__(PyObject *self, PyObject *args, PyObject *kwds)
-{
-    static char *kwlist[] = {"name", "globals", "locals", "fromlist",
-                             "level", 0};
-    PyObject *name, *globals = NULL, *locals = NULL, *fromlist = NULL;
-    int level = 0;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|OOOi:__import__",
-                    kwlist, &name, &globals, &locals, &fromlist, &level))
-        return NULL;
-    return PyImport_ImportModuleLevelObject(name, globals, locals,
-                                            fromlist, level);
-}
-```
-
-And the algorithm above also calls `PyImport_ImportModuleLevelObject()` in step 2. That is, it takes a shortcut. Why doesn't it always call `PyImport_ImportModuleLevelObject()` directly? This is because Python allows us to set `builtins.__import__()` to a custom function. If we do so, the algorithm can't take the shortcut. To know whether `builtins.__import__()` was overridden or not, the default implementation is stored in `tstate->interp->import_func`.
-
-People rarely override `builtins.__import__()`. Logging and debugging are the only real reasons to do that because the default implementation already provides powerfull mechanisms for customization. We'll be discussing the default implementation only.
-
-As we've seen, `builtins.__import__()` calls `PyImport_ImportModuleLevelObject()`, so we should proceed by studying this function. But we have a better option. You see, the most of the import system is implemented not in C but in Python in the [`importlib`](https://docs.python.org/3/library/importlib.html) standard module. Some of the functions are ported to C for performance reasons, and `PyImport_ImportModuleLevelObject()` is just a C port of the `importlib.__import__()` function. To understand what `PyImport_ImportModuleLevelObject()` does, we can study `importlib.__import__()`. This makes sense if you find Python code more readable, which I do.
-
-Let's summarize what we've learned in this section. To execute an import statement, the compiler produces the `IMPORT_NAME` bytecode instruction. This instruction calls `builtins.__import__()` or `PyImport_ImportModuleLevelObject()` if `builtins.__import__()` is not overridden. And calling the C `PyImport_ImportModuleLevelObject()` function is the same thing as calling the Python `importlib.__import__()` function. In other words, we can think that `__import__()` is set to `importlib.__import__()` by default.
-
-Finally, we conclude that a simple import statement like `import m` is essentially equivalent to this call:
-
-```python
-m = __import__('m', globals(), locals(), None, 0)
-```
-
-the signature of `__import__()` being the following:
-
-```python
-def __import__(name, globals=None, locals=None, fromlist=(), level=0):
-```
-
-That's nice, but what do the arguments to `__import__()` mean? The docstring of `importlib.__import__()` explains how the default implementation interprets them:
-
-```python
-def __import__(name, globals=None, locals=None, fromlist=(), level=0):
-    """Import a module.
-
-    The 'globals' argument is used to infer where the import is occurring from
-    to handle relative imports. The 'locals' argument is ignored. The
-    'fromlist' argument specifies what should exist as attributes on the module
-    being imported (e.g. ``from module import <fromlist>``).  The 'level'
-    argument represents the package location to import from in a relative
-    import (e.g. ``from ..pkg import mod`` would have a 'level' of 2).
-
-    """
-```
-
-There are multiple forms of the `import` statement, and they all work by calling `__import__()`. The difference between them is what they do before and after the call and how they make the call. The `from <> import <>` statements, for example, pass non-empty `fromlist`; relative imports pass non-zero `level`; and all froms of `import` pass global and local variables as `globals` and `locals` respectively.
-
-What to do with these arguments is up to a particular implementation of `__import__()`. The default implementation, for example, ignores `locals` completely and uses `globals` only for relative imports. A custom implementation may use the arguments in a different way, but we won't speculate on that.
-
-Before we see how `importlib.__import__()` works, let's express various forms of the `import` statement via `__import__()` as we did for `import m`. This way, we'll get rid of any remaining magic and understand what values the arguments to `__import__()` can take. It won't take that long. I'll omit the intermidiate steps of bytecode analysis this time.
-
-## Various forms of the import statement
+Let's now express other import statements via `__import__()` as we did for a simple `import m` statement. We'll do it much faster this time, though.
 
 ### Importing submodules
 
-We've seen that the `import m` statement is equivalent to this piece of code:
+This statement:
 
 ```python
-m = __import__('m', globals(), locals(), None, 0)
+import a.b.c
 ```
 
-Importing submodules is not much different. The `import a.b.c` statement compiles to the following bytecode:
+compiles to the following bytecode:
 
 ```text
-$ echo "import a.b.c" | python -m dis
+$ echo "import a.b.c" | python -m dis  
   1           0 LOAD_CONST               0 (0)
               2 LOAD_CONST               1 (None)
               4 IMPORT_NAME              0 (a.b.c)
@@ -596,58 +431,74 @@ $ echo "import a.b.c" | python -m dis
 ...
 ```
 
-Thus, it's equivalent to the following code:
+and is equivalent to the following code:
 
 ```python
 a = __import__('a.b.c', globals(), locals(), None, 0)
 ```
 
-Note that the arguments to ` __import__()` are passed in the same way as before. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we would expect, `importlib.__import__()` returns the top-level module in this case.
+Note that the arguments to ` __import__()` are passed in the same way as in the case of `import m`. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we would expect, `__import__()` returns the top-level module in this case.
 
 ### from <> import <>
 
-The `from m import f, g` statement
+This statement:
 
 ```python
-from m import f, g
+from a.b import f, g
 ```
 
-```
-$ echo "from m import f, g" | python3 -m dis
+compiles to the following bytecode:
+
+```text
+$ echo "from a.b import f, g" | python -m dis  
   1           0 LOAD_CONST               0 (0)
               2 LOAD_CONST               1 (('f', 'g'))
-              4 IMPORT_NAME              0 (m)
+              4 IMPORT_NAME              0 (a.b)
               6 IMPORT_FROM              1 (f)
               8 STORE_NAME               1 (f)
              10 IMPORT_FROM              2 (g)
              12 STORE_NAME               2 (g)
+             14 POP_TOP
+...
 ```
 
+and is equivalent to the following code:
+
 ```python
-m = __import__('m', globals(), locals(), ('f', 'g'), 0)
-f = m.f
-g = m.g
-del m
+a_b = __import__('a.b', globals(), locals(), ('f', 'g'), 0)
+f = a_b.f
+g = a_b.g
+del a_b
 ```
+
+Note that the names to import are passed as `fromlist`. When `fromlist` is not empty, `__import__()` returns not the top-level module as in the case of a simple import but the specifed module like `a.b`.
 
 ### Relative imports
 
+This statement:
+
 ```python
-from ..a.b import f
+from .. import f
 ```
 
-```
-$ echo "from ..a.b import f" | python -m dis
+compiles to the following bytecode
+
+```text
+$ echo "from .. import f" | python -m dis
   1           0 LOAD_CONST               0 (2)
               2 LOAD_CONST               1 (('f',))
-              4 IMPORT_NAME              0 (a.b)
+              4 IMPORT_NAME              0
               6 IMPORT_FROM              1 (f)
               8 STORE_NAME               1 (f)
+             10 POP_TOP
 ```
+
+and is equivalent to the following code:
 
 ```python
-a_dot_b = __import__('a.b', globals(), locals(), ('f'), 2)
-f = a_dot_b.f
-del a_dot_b
+m = __import__('', globals(), locals(), ('f'), 2)
+f = m.f
+del m
 ```
 
+The `level` argument tells `__import__()` how many leading dots the relative import has. Since it's set to `2`, `__import__()` calculates the name of the module by (1) taking the value of `__package__` and (2) stripping its last portion. The `__package__` attribute is available to `__import__()` because it's passed with `globals()`.
