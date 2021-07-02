@@ -191,8 +191,6 @@ How does it work? When Python traverses path entries on the path during the modu
 
 The initial idea of requiring `__init__.py` was to prevent directories on the path (`sys.path` or `__path__`) named like `string` or `site` from shadowing standard modules. Namespace package do not shadow other modules because they have lower precedence during the module search.
 
-
-
 ## Importing from modules
 
 Besides importing modules, we can also import module attributes using a `from <> import <>` statement like this:
@@ -260,7 +258,7 @@ Python will throw an error:
 ImportError: attempted relative import beyond top-level package
 ````
 
-This is because Python does not move through the file system to resole relative imports. It just takes the value of `__package__`, strips some suffix and appends the new one to get the module name.
+This is because Python does not move through the file system to resole relative imports. It just takes the value of `__package__`, strips some suffix and appends the new one to get the absolute module name.
 
 Obviously, relative imports break when `__package__` is not defined at all. In this case, you get the following error:
 
@@ -269,8 +267,6 @@ ImportError: attempted relative import with no known parent package
 ```
 
 You most commonly see it when you run a Python file with relative imports as a script. This is because the code is executed in the `"__main__"` module whose `__package__` attribute is set to `None`. Note that "parent package" is the term that Python uses to denote the current package.
-
-Python doesn't forget to set `__package__` correctly, but we may. When `__package__` is `None`, the current package is calculated as `__name__` for packages and `self.name.rpartition('.')[0]` for non-packages. The latter is basically a module name without the part after the last dot or an empty string if the name doesn't contain dots.
 
 ## Desugaring the import statement
 
@@ -501,4 +497,101 @@ f = m.f
 del m
 ```
 
-The `level` argument tells `__import__()` how many leading dots the relative import has. Since it's set to `2`, `__import__()` calculates the name of the module by (1) taking the value of `__package__` and (2) stripping its last portion. The `__package__` attribute is available to `__import__()` because it's passed with `globals()`.
+The `level` argument tells `__import__()` how many leading dots the relative import has. Since it's set to `2`, `__import__()` calculates the absolute name of the module by (1) taking the value of `__package__` and (2) stripping its last portion. The `__package__` attribute is available to `__import__()` because it's passed with `globals()`.
+
+Now let's see how `__import__()` works. 
+
+## The import process
+
+The algorithm that `__import__()` implements can be summarized as follows:
+
+1. If `level > 0`, resolve a relative module name to an absolute one. 
+2. If the module is in `sys.modules`, return it.
+3. If the module has a parent module (the name contains at least one dot), import the parent module if it's not in `sys.modules` yet.
+4. Find the module's spec. If the spec is not found, raise `ModuleNotFoundError`.
+5. Load the module from the spec.
+6. Add the module to the dictionary of the parent module.
+7. Return the loaded module.
+
+Let's elaborate on steps 1, 2, 4 and 5.
+
+### Resolving relative names
+
+To resolve a relative module name, `__import__()` needs to know the current package of the module from which the import statement was executed. So it looks up `__package__` in `globals`. This attribute is used whenever it's not `None`. Otherwise, `__import__()`  falls back on other methods to calculate the current package. This handles the case when someone forgets to set `__package__`. Here's the function that performs the calculations if your wonder about the details:
+
+```python
+# Lib/importlib/_bootstrap.py
+
+def _calc___package__(globals):
+    """Calculate what __package__ should be.
+
+    __package__ is not guaranteed to be defined or could be set to None
+    to represent that its proper value is unknown.
+
+    """
+    package = globals.get('__package__')
+    spec = globals.get('__spec__') # we'll see what spec is next
+    if package is not None:
+        if spec is not None and package != spec.parent:
+            _warnings.warn("__package__ != __spec__.parent "
+                           f"({package!r} != {spec.parent!r})",
+                           ImportWarning, stacklevel=3)
+        return package
+    elif spec is not None:
+        return spec.parent
+    else:
+        _warnings.warn("can't resolve package from __spec__ or __package__, "
+                       "falling back on __name__ and __path__",
+                       ImportWarning, stacklevel=3)
+        # use `__name__` as the current package name
+        package = globals['__name__']
+        if '__path__' not in globals:
+            # not a package, drop the last portion of the name
+            # can be an empty string if the module is top-level
+            package = package.rpartition('.')[0]
+    return package
+```
+
+The calculated value of the current package can be an empty string (e.g. the module is a top-level non-package). In this case all relative imports break. This is ensured by the following function that performs some other checks too:
+
+```python
+# Lib/importlib/_bootstrap.py
+
+def _sanity_check(name, package, level):
+    """Verify arguments are "sane"."""
+    if not isinstance(name, str):
+        raise TypeError('module name must be str, not {}'.format(type(name)))
+    if level < 0:
+        raise ValueError('level must be >= 0')
+    if level > 0:
+        if not isinstance(package, str):
+            raise TypeError('__package__ not set to a string')
+        elif not package:
+            raise ImportError('attempted relative import with no known parent '
+                              'package')
+    if not name and level == 0:
+        raise ValueError('Empty module name')
+```
+
+Finally, the relative name gets resolved:
+
+```python
+# Lib/importlib/_bootstrap.py
+
+def _resolve_name(name, package, level):
+    """Resolve a relative module name to an absolute one."""
+    # strip last `level - 1` portions of `package`
+    bits = package.rsplit('.', level - 1)
+    if len(bits) < level:
+        # stripped less than `level - 1` portions
+        raise ImportError('attempted relative import beyond top-level package')
+    base = bits[0]
+    return '{}.{}'.format(base, name) if name else base
+```
+
+
+
+### The module cache
+
+### Finders and loaders
+
