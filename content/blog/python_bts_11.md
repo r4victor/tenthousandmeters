@@ -501,7 +501,7 @@ The `level` argument tells `__import__()` how many leading dots the relative imp
 
 Now let's see how `__import__()` works. 
 
-## The import process
+## Inside \__import__()
 
 The algorithm that `__import__()` implements can be summarized as follows:
 
@@ -589,9 +589,15 @@ def _resolve_name(name, package, level):
     return '{}.{}'.format(base, name) if name else base
 ```
 
-
-
 ### The module cache
+
+Python stores imported modules in the `sys.modules` dictionary. This dictionary maps module names to module objects and acts as a cache. Before searching for a module, `__import__()` checks `sys.modules` and returns the module immideatly if it's there. Every imported module is saved in `sys.modules`.
 
 ### Finders and loaders
 
+If the module wasn't found in `sys.modules`, `__import__()` starts the import process, which consists of two steps:
+
+1. finding the module; and
+2. loading the module.
+
+Finders and loaders are objects that perform these steps. The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module.
