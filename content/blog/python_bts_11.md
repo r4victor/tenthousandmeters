@@ -600,4 +600,51 @@ If the module wasn't found in `sys.modules`, `__import__()` starts the import pr
 1. finding the module; and
 2. loading the module.
 
-Finders and loaders are objects that perform these steps. The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module.
+Finders and loaders are objects that perform these steps. The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module. The same object can function both as a finder and as a loader. Such an object is called an **importer**.
+
+Finders implement the `find_spec()` method that returns a module spec. A **module spec** is an object that encapsulates the loader and all the information needed for loading. This includes module's special attributes, such as `__name__`,  `__path__` and `__package__`. They are simply copied from the spec after the module object is created. The full description of spec attributes can be found in [the docs](https://docs.python.org/3/library/importlib.html#importlib.machinery.ModuleSpec):
+
+> * `name` (`__name__`)
+>
+>   A string for the fully-qualified name of the module.
+>
+> - `loader` (`__loader__`)
+>
+>   The [Loader](https://docs.python.org/3/glossary.html#term-loader) that should be used when loading the module. [Finders](https://docs.python.org/3/glossary.html#term-finder) should always set this.
+>
+> - `origin` (`__file__`)
+>
+>   Name of the place from which the module is loaded, e.g. “builtin” for built-in modules and the filename for modules loaded from source. Normally “origin” should be set, but it may be `None` (the default) which indicates it is unspecified (e.g. for namespace packages).
+>
+> - `submodule_search_locations` (`__path__`)
+>
+>   List of strings for where to find submodules, if a package (`None` otherwise).
+>
+> - `loader_state`
+>
+>   Container of extra module-specific data for use during loading (or `None`).
+>
+> - `cached` (`__cached__`)
+>
+>   String for where the compiled module should be stored (or `None`).
+>
+> - `parent` (`__package__`)
+>
+>   (Read-only) The fully-qualified name of the package under which the module should be loaded as a submodule (or the empty string for top-level modules). For packages, it is the same as [`__name__`](https://docs.python.org/3/reference/import.html#__name__).
+>
+> - `has_location`
+>
+>   Boolean indicating whether or not the module’s “origin” attribute refers to a loadable location.
+
+To find a module spec, `__import__()` iterates over the finders listed in `sys.meta_path` and calls `find_spec()` on each one until the spec is found. If the spec is not found, it raises `ModuleNotFoundError`.
+
+By default, `sys.meta_path` stores three finders:
+
+1. `BuiltinImporter` that works with built-in modules
+2. `FrozenImporter` that works with frozen modules; and
+3. `PathFinder` that works with Python files, directories and C extensions.
+
+These are called **meta path finders**. Python differentiates them from **path entry finders** that are a part of `PathFinder`. We'll see how different finders work in the next sections.
+
+To create a module object, `__import__()` calls loader's `create_module()` method.
+
