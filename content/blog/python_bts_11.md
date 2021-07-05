@@ -258,7 +258,7 @@ Python will throw an error:
 ImportError: attempted relative import beyond top-level package
 ````
 
-This is because Python does not move through the file system to resole relative imports. It just takes the value of `__package__`, strips some suffix and appends the new one to get the absolute module name.
+This is because Python does not move through the file system to resolve relative imports. It just takes the value of `__package__`, strips some suffix and appends the new one to get the absolute module name.
 
 Obviously, relative imports break when `__package__` is not defined at all. In this case, you get the following error:
 
@@ -266,7 +266,9 @@ Obviously, relative imports break when `__package__` is not defined at all. In t
 ImportError: attempted relative import with no known parent package
 ```
 
-You most commonly see it when you run a Python file with relative imports as a script. This is because the code is executed in the `"__main__"` module whose `__package__` attribute is set to `None`. Note that "parent package" is the term that Python uses to denote the current package.
+You most commonly see it when you run a Python file with relative imports as a script. This is because the code is executed in the `"__main__"` module whose `__package__` attribute is set to `None`.
+
+Note that "parent package" is the term that Python uses to denote the current package.
 
 ## Desugaring the import statement
 
@@ -506,53 +508,18 @@ Now let's see how `__import__()` works.
 The algorithm that `__import__()` implements can be summarized as follows:
 
 1. If `level > 0`, resolve a relative module name to an absolute one. 
-2. If the module is in `sys.modules`, return it.
-3. If the module has a parent module (the name contains at least one dot), import the parent module if it's not in `sys.modules` yet.
-4. Find the module's spec. If the spec is not found, raise `ModuleNotFoundError`.
-5. Load the module from the spec.
-6. Add the module to the dictionary of the parent module.
-7. Return the loaded module.
+2. Import the module.
+3. If `fromlist` is empty, slice the module name up to the first dot to get the top-level module name. Import and return the top-level module.
+4. If `fromlist` contains names that are not in the module's dictionary, import them as submodules. If `"*"`  is in `fromlist`, use module's `__all__` as new `fromlist` and repeat this step.
+5. Return the module.
 
-Let's elaborate on steps 1, 2, 4 and 5.
+Step 2 is where all the action happens. We'll focus on it in the remaining sections, but let us first elaborate on step 1.
 
 ### Resolving relative names
 
-To resolve a relative module name, `__import__()` needs to know the current package of the module from which the import statement was executed. So it looks up `__package__` in `globals`. This attribute is used whenever it's not `None`. Otherwise, `__import__()`  falls back on other methods to calculate the current package. This handles the case when someone forgets to set `__package__`. Here's the function that performs the calculations if your wonder about the details:
+To resolve a relative module name, `__import__()` needs to know the current package of the module from which the import statement was executed. So it looks up `__package__` in `globals`. If `__package__` is `None`, `__import__()` tries to deduce the current package from `__name__`. Since Python always sets `__package__` correctly, this fallback is typically unnecessary. It can only be useful for modules originated by other means. All we should remember is that relative imports break when `__package__` is set to an empty string, as in the case of a top-level module, or to `None`, as in the case of a script, and have a chance of succeeding otherwise. You can look at the [`_calc___package__()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap.py#L1090) function to see how the current package is calculated exactly.
 
-```python
-# Lib/importlib/_bootstrap.py
-
-def _calc___package__(globals):
-    """Calculate what __package__ should be.
-
-    __package__ is not guaranteed to be defined or could be set to None
-    to represent that its proper value is unknown.
-
-    """
-    package = globals.get('__package__')
-    spec = globals.get('__spec__') # we'll see what spec is next
-    if package is not None:
-        if spec is not None and package != spec.parent:
-            _warnings.warn("__package__ != __spec__.parent "
-                           f"({package!r} != {spec.parent!r})",
-                           ImportWarning, stacklevel=3)
-        return package
-    elif spec is not None:
-        return spec.parent
-    else:
-        _warnings.warn("can't resolve package from __spec__ or __package__, "
-                       "falling back on __name__ and __path__",
-                       ImportWarning, stacklevel=3)
-        # use `__name__` as the current package name
-        package = globals['__name__']
-        if '__path__' not in globals:
-            # not a package, drop the last portion of the name
-            # can be an empty string if the module is top-level
-            package = package.rpartition('.')[0]
-    return package
-```
-
-The calculated value of the current package can be an empty string (e.g. the module is a top-level non-package). In this case all relative imports break. This is ensured by the following function that performs some other checks too:
+Once the current package is calculated, `__import__()` checks whether it got well-formed arguments:
 
 ```python
 # Lib/importlib/_bootstrap.py
@@ -573,7 +540,7 @@ def _sanity_check(name, package, level):
         raise ValueError('Empty module name')
 ```
 
-Finally, the relative name gets resolved:
+and, finally, resolves the relative name:
 
 ```python
 # Lib/importlib/_bootstrap.py
@@ -589,54 +556,31 @@ def _resolve_name(name, package, level):
     return '{}.{}'.format(base, name) if name else base
 ```
 
-### The module cache
+Now let's discuss how modules are imported.
 
-Python stores imported modules in the `sys.modules` dictionary. This dictionary maps module names to module objects and acts as a cache. Before searching for a module, `__import__()` checks `sys.modules` and returns the module immideatly if it's there. Every imported module is saved in `sys.modules`.
+### The import process
+
+The function that imports modules is called [`_find_and_load()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap.py#L1022). It takes an absolute module name and performs the following steps:
+
+1. If the module is in `sys.modules`, return it.
+2. Initialize the path to search for the module to `None`.
+3. If the module has a parent module (the name contains at least one dot), import the parent module if it's not in `sys.modules` yet. Set the path to parent's `__path__`.
+4. Find the module's spec using the module's name and the path. If the spec is not found, raise `ModuleNotFoundError`.
+5. Load the module from the spec.
+6. Add the module to the dictionary of the parent module.
+7. Return the module.
+
+All imported modules are stored in the `sys.modules` dictionary. This dictionary maps module names to module objects and acts as a cache. Before searching for a module, `_find_and_load() ` checks `sys.modules` and returns the module immideatly if it's there. Modules are added to `sys.module` at the end of step 5.
+
+If the module wasn't found in `sys.modules`, `_find_and_load() `  proceeds with importing the module. The import process consists of finding the module and loading the module. Finders and loaders are objects that perform these tasks.
 
 ### Finders and loaders
 
-If the module wasn't found in `sys.modules`, `__import__()` starts the import process, which consists of two steps:
+The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module. The same object can function both as a finder and as a loader. Such an object is called an **importer**.
 
-1. finding the module; and
-2. loading the module.
+Finders implement the `find_spec()` method that takes a module name and a path to search for the module and returns a module spec. A **module spec** is an object that encapsulates the loader and all the information needed for loading. This includes module's special attributes, such as `__name__`,  `__path__` and `__package__`. They are simply copied from the spec after the module object is created. The full list of spec attributes can be found in [the docs](https://docs.python.org/3/library/importlib.html#importlib.machinery.ModuleSpec).
 
-Finders and loaders are objects that perform these steps. The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module. The same object can function both as a finder and as a loader. Such an object is called an **importer**.
-
-Finders implement the `find_spec()` method that returns a module spec. A **module spec** is an object that encapsulates the loader and all the information needed for loading. This includes module's special attributes, such as `__name__`,  `__path__` and `__package__`. They are simply copied from the spec after the module object is created. The full description of spec attributes can be found in [the docs](https://docs.python.org/3/library/importlib.html#importlib.machinery.ModuleSpec):
-
-> * `name` (`__name__`)
->
->   A string for the fully-qualified name of the module.
->
-> - `loader` (`__loader__`)
->
->   The [Loader](https://docs.python.org/3/glossary.html#term-loader) that should be used when loading the module. [Finders](https://docs.python.org/3/glossary.html#term-finder) should always set this.
->
-> - `origin` (`__file__`)
->
->   Name of the place from which the module is loaded, e.g. “builtin” for built-in modules and the filename for modules loaded from source. Normally “origin” should be set, but it may be `None` (the default) which indicates it is unspecified (e.g. for namespace packages).
->
-> - `submodule_search_locations` (`__path__`)
->
->   List of strings for where to find submodules, if a package (`None` otherwise).
->
-> - `loader_state`
->
->   Container of extra module-specific data for use during loading (or `None`).
->
-> - `cached` (`__cached__`)
->
->   String for where the compiled module should be stored (or `None`).
->
-> - `parent` (`__package__`)
->
->   (Read-only) The fully-qualified name of the package under which the module should be loaded as a submodule (or the empty string for top-level modules). For packages, it is the same as [`__name__`](https://docs.python.org/3/reference/import.html#__name__).
->
-> - `has_location`
->
->   Boolean indicating whether or not the module’s “origin” attribute refers to a loadable location.
-
-To find a module spec, `__import__()` iterates over the finders listed in `sys.meta_path` and calls `find_spec()` on each one until the spec is found. If the spec is not found, it raises `ModuleNotFoundError`.
+To find a module spec, `_find_and_load()` iterates over the finders listed in `sys.meta_path` and calls `find_spec()` on each one until the spec is found. If the spec is not found, it raises `ModuleNotFoundError`.
 
 By default, `sys.meta_path` stores three finders:
 
@@ -646,5 +590,125 @@ By default, `sys.meta_path` stores three finders:
 
 These are called **meta path finders**. Python differentiates them from **path entry finders** that are a part of `PathFinder`. We'll see how different finders work in the next sections.
 
-To create a module object, `__import__()` calls loader's `create_module()` method.
+To create a module object, `_find_and_load()`  calls the loader's `create_module()` method that takes a module spec and returns a module object. If this method is not implemented or returns `None`, then `__import__()` creates the new module object itself. If the module object does not define some special attributes, which is usually the case, the attributes are copied from the spec. Here's how this logic is implemented in the code:
+
+```python
+def module_from_spec(spec):
+    """Create a module based on the provided spec."""
+    # Typically loaders will not implement create_module().
+    module = None
+    if hasattr(spec.loader, 'create_module'):
+        # If create_module() returns `None` then it means default
+        # module creation should be used.
+        module = spec.loader.create_module(spec)
+    elif hasattr(spec.loader, 'exec_module'):
+        raise ImportError('loaders that define exec_module() '
+                          'must also define create_module()')
+    if module is None:
+        # _new_module(name) returns type(sys)(name)
+        module = _new_module(spec.name)
+    
+    # copy undefined module attributes (__loader__, __package__, etc.)
+    # from the spec
+    _init_module_attrs(spec, module)
+    return module
+```
+
+After creating the module object, `_find_and_load()`  executes the module by calling the loader's `exec_module()` method. What this method does depends on the loader, but typically it populates the module's dictionary with functions, classes, constants and other things that the module defines. The loader for Python files, for example, executes the contents of the file when `exec_module()` is called.
+
+The full loading process is implemented as follows:
+
+```python
+def _load_unlocked(spec):
+    # ... compatibility stuff
+
+    module = module_from_spec(spec)
+
+    # needed for parallel imports
+    spec._initializing = True
+    try:
+        sys.modules[spec.name] = module
+        try:
+            if spec.loader is None:
+                if spec.submodule_search_locations is None:
+                    raise ImportError('missing loader', name=spec.name)
+                # A namespace package so do nothing.
+            else:
+                spec.loader.exec_module(module)
+        except:
+            try:
+                del sys.modules[spec.name]
+            except KeyError:
+                pass
+            raise
+        # Move the module to the end of sys.modules.
+        # this is to maintain the import order;
+        # remember that Python dicts are ordered?
+        module = sys.modules.pop(spec.name)
+        sys.modules[spec.name] = module
+        _verbose_message('import {!r} # {!r}', spec.name, spec.loader)
+    finally:
+        spec._initializing = False
+
+    return module
+```
+
+This piece of code is interesting for several reasons. First, a module is added to `sys.modules` before it is executed. Due to this logic, Python supports circular imports. If we have two modules that import each other like this:
+
+```python
+# a.py
+import b
+
+X = "some constant"
+```
+
+```python
+# b.py
+import a
+```
+
+We can import them without any issues:
+
+```pycon
+$ python -q
+>>> import a
+>>> 
+```
+
+The catch is that the module `a` is only partially initialized when the module `b` is executed. So if we use `X` in `b`: 
+
+```python
+# b.py
+import a
+
+print(X)
+```
+
+we get an error:
+
+```pycon
+$ python -q
+>>> import a
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/a.py", line 1, in <module>
+    import b
+  File "/b.py", line 3, in <module>
+    print(X)
+NameError: name 'X' is not defined
+```
+
+Second, a module is removed from `sys.modules` if the execution fails for any reason, but modules that were successfully imported as a side-effect remain in `sys.modules`.
+
+Finally, the module in `sys.modules` can be replaced during the module execution. Thus, the module is looked up in `sys.modules` before it's returned.
+
+We're now done with `_find_and_load()` and `__import__()` and ready to see how different finders and loaders work. We begin with `PathFinder` since it's a meta path finder that application developers should care about the most.
+
+## PathFinder
+
+`PathFinder` searches for Python files, directories and C extensions on the path. The path is passed as an argument to `find_spec() ` and set to parent's `__path__`. If it's `None`, as in the case of a top-level module, `sys.path` is used for the path instead.
+
+`PathFinder` doesn't do the search itself but delegates this work to path entry finders. For each entry on the path, it 
+
+## C modules
 
