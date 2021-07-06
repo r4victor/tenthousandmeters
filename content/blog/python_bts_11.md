@@ -118,7 +118,7 @@ import a.b
 
 it first imports the module `"a"` and then the submodule `"a.b"`. It adds the submodule to the module's dictionary and assigns the module to the variable `a`, so we can access the submodule as a module's attribute (`a.b`).
 
-A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. When Python imports a top-level module, it looks up the appropriately named Python file, directory and C extension in the directories listed in `sys.path`. But when it imports a submodule, it uses the `__path__` attribute of the parent module instead of `sys.path`.
+A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. When Python imports a top-level module, it searches for the module in the directories and ZIP archives listed in `sys.path`. But when it imports a submodule, it uses the `__path__` attribute of the parent module instead of `sys.path`.
 
 ### Regular packages
 
@@ -187,9 +187,9 @@ This is because `company_name` is a namespace package that contains two location
 _NamespacePath(['/morelibs/company_name', '/mylibs/company_name'])
 ```
 
-How does it work? When Python traverses path entries on the path during the module search, it remebers the directories without `__init__.py` that match the module's name. If after traversing all the entries, it couldn't find a regular package, a Python file or a C extension, it creates a module object whose `__path__` contains the memorized directories.
+How does it work? When Python traverses path entries on the path (`sys.path` or `__path__`) during the module search, it remembers the directories without `__init__.py` that match the module's name. If after traversing all the entries, it couldn't find a regular package, a Python file or a C extension, it creates a module object whose `__path__` contains the memorized directories.
 
-The initial idea of requiring `__init__.py` was to prevent directories on the path (`sys.path` or `__path__`) named like `string` or `site` from shadowing standard modules. Namespace package do not shadow other modules because they have lower precedence during the module search.
+The initial idea of requiring `__init__.py` was to prevent directories on the path named like `string` or `site` from shadowing standard modules. Namespace package do not shadow other modules because they have lower precedence during the module search.
 
 ## Importing from modules
 
@@ -213,7 +213,17 @@ Note that the `module` variable is not available after the import as if it was d
 del module
 ```
 
-When Python sees that a module doesn't have a specified attribute, it considers the attribute to be a submodule and tries to import it. If, in our example, the module defines `func` and `Class` but not `submodule`, then Python will try to import `"module.submodule"`.
+When Python sees that a module doesn't have a specified attribute, it considers the attribute to be a submodule and tries to import it. So if the module defines `func` and `Class` but not `submodule`, Python will try to import `"module.submodule"`.
+
+##Wildcard imports
+
+If we don't want to specify explicitly the names to import from a module, we can use a wildcard form of import:
+
+```
+from module import *
+```
+
+This statement works as if `"*"` was replaced with all the module's public names. These are the names in the module's dictionary that do not start with an underscore `"_"` or the names listed in the `__all__` attribute if the module defines it.
 
 ## Relative imports
 
@@ -387,7 +397,7 @@ import m
 is actually equivalent to this code:
 
 ```python
-m = __import__("m", globals(), locals(), None, 0)
+m = __import__('m', globals(), locals(), None, 0)
 ```
 
 The meaning of the arguments is explained in the docsting of `importlib.__import__()`:
@@ -435,7 +445,7 @@ and is equivalent to the following code:
 a = __import__('a.b.c', globals(), locals(), None, 0)
 ```
 
-Note that the arguments to ` __import__()` are passed in the same way as in the case of `import m`. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we would expect, `__import__()` returns the top-level module in this case.
+The arguments to ` __import__()` are passed in the same way as in the case of `import m`. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we would expect, `__import__()` returns the top-level module in this case.
 
 ### from <> import <>
 
@@ -469,7 +479,37 @@ g = a_b.g
 del a_b
 ```
 
-Note that the names to import are passed as `fromlist`. When `fromlist` is not empty, `__import__()` returns not the top-level module as in the case of a simple import but the specifed module like `a.b`.
+The names to import are passed as `fromlist`. When `fromlist` is not empty, `__import__()` returns not the top-level module as in the case of a simple import but the specifed module like `a.b`.
+
+### from <> import *
+
+This statement:
+
+```
+from m import *
+```
+
+compiles to the following bytecode:
+
+```pycon
+$ echo "from m import *" | python -m dis
+  1           0 LOAD_CONST               0 (0)
+              2 LOAD_CONST               1 (('*',))
+              4 IMPORT_NAME              0 (m)
+              6 IMPORT_STAR
+```
+
+and is equivalent to the following code:
+
+```python
+m = __import__('m', globals(), locals(), ('*',), 0)
+all_ = m.__dict__.get('__all__')
+if all_ is None:
+    all_ = [k for k in m.__dict__.keys() if not k.startswith('_')]
+for name in all_:
+    globals()[name] = getattr(m, name)
+del m, all_, name
+```
 
 ### Relative imports
 
@@ -494,7 +534,7 @@ $ echo "from .. import f" | python -m dis
 and is equivalent to the following code:
 
 ```python
-m = __import__('', globals(), locals(), ('f'), 2)
+m = __import__('', globals(), locals(), ('f',), 2)
 f = m.f
 del m
 ```
@@ -578,7 +618,9 @@ If the module wasn't found in `sys.modules`, `_find_and_load() `  proceeds with 
 
 The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module. The same object can function both as a finder and as a loader. Such an object is called an **importer**.
 
-Finders implement the `find_spec()` method that takes a module name and a path to search for the module and returns a module spec. A **module spec** is an object that encapsulates the loader and all the information needed for loading. This includes module's special attributes, such as `__name__`,  `__path__` and `__package__`. They are simply copied from the spec after the module object is created. The full list of spec attributes can be found in [the docs](https://docs.python.org/3/library/importlib.html#importlib.machinery.ModuleSpec).
+Finders implement the `find_spec()` method that takes a module name and a path to search for the module and returns a module spec. A **module spec** is an object that encapsulates the loader and all the information needed for loading. This includes module's special attributes. They are simply copied from the spec after the module object is created. For example, `__path__` is copied from `spec.submodule_search_locations` and `__package__` is copied from `spec.parent`.
+
+ The full list of spec attributes can be found in [the docs](https://docs.python.org/3/library/importlib.html#importlib.machinery.ModuleSpec).
 
 To find a module spec, `_find_and_load()` iterates over the finders listed in `sys.meta_path` and calls `find_spec()` on each one until the spec is found. If the spec is not found, it raises `ModuleNotFoundError`.
 
@@ -706,9 +748,43 @@ We're now done with `_find_and_load()` and `__import__()` and ready to see how d
 
 ## PathFinder
 
-`PathFinder` searches for Python files, directories and C extensions on the path. The path is passed as an argument to `find_spec() ` and set to parent's `__path__`. If it's `None`, as in the case of a top-level module, `sys.path` is used for the path instead.
+`PathFinder` searches for Python files, directories and C extensions on the path. The path is parent module's `__path__` passed as the `path` argument to `find_spec() ` or `sys.path` if this argument is `None`. It's expected to be an iterable of strings. Each string, called a **path entry**, should specify a location to search for modules, such as a directory on the file system.
 
-`PathFinder` doesn't do the search itself but delegates this work to path entry finders. For each entry on the path, it 
+`PathFinder` doesn't actually do the search itself but associates each path entry with a **path entry finder** that knows how to find modules in the location specified by the entry. To find a module, `PathFinder` iterates over the path entries and, for each entry, calls  `find_spec() `  of the corresponding path entry finder.
+
+To find out which path entry finder to use for a particular entry, `PathFinder` calls path hooks listed in `sys.path_hooks`. A path hook is a callable that takes a path entry and returns a path entry finder.  It can also raise `ImportError`, in which case `PathFinder` tries the next hook. To avoid calling hooks on each import, `PathFinder` caches the results in the `sys.path_importer_cache` dictionary that maps path entries to path entry finders.
+
+By default, `sys.path_hooks` contains two path hooks:
+
+1. a hook that returns `zipimporter` instances; and
+2. a hook that returns `FileFinder` instances.
+
+A `zipimporter` instance can find modules in a ZIP archive or in the directory inside a ZIP archive. It supports the same kinds of modules as `FileFinder` but with some restrictions. For example, it doesn't support C extensions. You can read more about `zipimporter` in [the docs](https://docs.python.org/3/reference/simple_stmts.html#import) and in [PEP 273](https://www.python.org/dev/peps/pep-0273/). We'll discuss `FileFinder` that searches for modules in directories.
+
+
+
+When a path entry finder returns a spec that doesn't specify a loader, this means that the spec describes a portion of a namespace package (typically just a directory). In this case, `PathFinder` remembers the `submodule_search_locations` attribute of this spec and continues with the next path entry hoping that it will find a Python file, a regular package or a C extension. If it doesn't find any of these eventually, it creates a new spec for a namespace package whose `submodule_search_locations` contains all the memorized portions.
+
+To sum up what we've said about `PathFinder`, here's the complete algorithm that its `find_spec()` implements:
+
+1. If `path` is `None`, set `path` to `sys.path`.
+2. Initialize the list of path entries of a potential namespace package: `namespace_path = []`.
+3. For each path entry in `path`:
+    1. Look up the entry in `sys.path_importer_cache` to get a path entry finder.
+    2. If the entry is not in `sys.path_importer_cache`, call hooks listed in `sys.path_hooks` until some hook returns a path entry finder.
+    3. Store the path entry finder in `sys.path_importer_cache`. If no path entry finder is found, store `None` and continue with the next entry.
+    4. Call `find_spec()` of the path entry finder. If the spec is `None`, continue with the next entry.
+    5. If found a namepsace package (`spec.loader` is `None`), extend `namespace_path` with `spec.submodule_search_locations` and continue with the next entry.
+    6. Return the spec.
+4. If `namespace_path` is empty, return `None`.
+5. Create a new namespace package spec with `submodule_search_locations` set to `namespace_path`.
+6. Return the spec.
+
+Let's now discuss how `FileFinder` works.
+
+## FileFinder
+
+
 
 ## C modules
 
