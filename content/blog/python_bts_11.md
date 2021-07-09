@@ -107,7 +107,7 @@ Built-in modules are a part of the `python` executable. They are written in C an
 
 Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is compiled to a code object and then the binary representation of the code object is incorporated into the executable. The examples of frozen modules are `_frozen_importlib` and `_frozen_importlib_external` . Python freezes them because they implement the core of the import system and, thus, cannot be imported like other Python files.
 
-C extensions are a bit like built-in modules and a bit like Python files. On one hand, they are written in C or C++ and interact with Python via the [Python/C API](https://docs.python.org/3/c-api/index.html). On the other hand, they are not a part of the `python` executable but loaded dynamically during the import.
+C extensions are a bit like built-in modules and a bit like Python files. On one hand, they are written in C or C++ and interact with Python via the [Python/C API](https://docs.python.org/3/c-api/index.html). On the other hand, they are not a part of the `python` executable but loaded dynamically during the import. Technically, C extensions are shared libraries that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). They usually named like `modname.so`, but file extensions may be different depending on the platform. On my macOS, for example, any of these extensions will work: `.cpython-39-darwin.so`, `.abi3.so` and `.so`. And on windows, you'll see `.dll` and its variations.
 
 Python bytecode files are typically live in a `__pycache__` directory alongside regular Python files. They are the result of compiling Python code to bytecode. More specifically, a `.pyc` file contains some metadata followed by a marshalled code object of a module. Its purpose is to reduce module's loading time by skipping the compilation stage. When Python imports a `.py` file, it first searches for a `.pyc` file in the `__pycache__` directory and executes it. If the `.pyc` file does not exist, Python compiles the code and creates it. However, we wouldn't call `.pyc` files modules if we couldn't execute and import them directly. Surprisingly, we can:
 
@@ -171,6 +171,20 @@ So you import the functions in `__init__.py`:
 from mylibrary.module1 import func1
 from mylibrary.module2 import func2
 ```
+
+A directory with a C extension named `__init__.so` or with a `.pyc` file named `__init__.pyc` is also a regular package. The import system finds such packages perfectly fine:
+
+```pycon
+$ ls
+spam
+$ ls spam/
+__init__.so
+$ python -q
+>>> import spam
+>>> 
+```
+
+
 
 ### Namespace packages
 
@@ -571,7 +585,7 @@ We're now done with import statements and can focus solely on the `__import__()`
 
 ## Inside \__import__()
 
-As I learned preparing this article, studying `__import__()` by following all its code paths is not the most entertaining experience. So I propose a better option for you. I'll summarize the key algorithms of the import process in plain English and give links to the functions that implement these algorithms, so you can read the code if something is left unclear.
+As I learned preparing this article, studying `__import__()` by following all its code paths is not the most entertaining experience. So I offer a better option for you. I'll summarize the key algorithms of the import process in plain English and give links to the functions that implement these algorithms, so you can read the code if something is left unclear.
 
 
 
@@ -780,7 +794,7 @@ We're now done with `_find_and_load()` and `__import__()` and ready to see how d
 
 ## PathFinder
 
-`PathFinder` searches for Python files, directories and C extensions on the module search path. The module search path is parent's `__path__` passed as the `path` argument to `find_spec() ` or `sys.path` if this argument is `None`. It's expected to be an iterable of strings. Each string, called a **path entry**, should specify a location to search for modules, such as a directory on the file system.
+`PathFinder` searches for modules on the module search path. The module search path is parent's `__path__` passed as the `path` argument to `find_spec() ` or `sys.path` if this argument is `None`. It's expected to be an iterable of strings. Each string, called a **path entry**, should specify a location to search for modules, such as a directory on the file system.
 
 `PathFinder` doesn't actually do the search itself but associates each path entry with a **path entry finder** that knows how to find modules in the location specified by the entry. To find a module, `PathFinder` iterates over the path entries and, for each entry, calls  `find_spec() `  of the corresponding path entry finder.
 
@@ -810,63 +824,85 @@ To sum up what we said about `PathFinder`, here's the complete algorithm that it
 5. Create a new namespace package spec with `submodule_search_locations` based on `namespace_path`.
 6. Return the spec.
 
-Note that at step 5, the `submodule_search_locations` attribute of a new spec is set not to the `namespace_path` list directly but to a [`_NamespacePath()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L1167) instance that encapsulates `namespace_path`. `_NamespacePath()` yields path entries like a regular list but recalculates them before yielding. This means that we can add a new portion of a namespace package to `sys.path` after the package was imported.
-
 All this complicated logic of `PathFinder` is unnecessary most of the time. Typically, a path entry is just a path to a directory, so `PathFinder` calls the `find_spec()` method a `FileFinder` instance returned by the corresponding hook.
 
 ## FileFinder
 
-A `FileFinder` instance searches for modules in the directory specified by the path entry. It supports different kinds of modules and creates specs with different loaders:
-
-* `ExtensionFileLoader` to load C extensions
-* `SourceFileLoader` to load `.py` files; and
-* `SourcelessFileLoader` to load `.pyc` files.
-
-Each loader has
-
-Its `find_spec()` method takes an absolute module name and performs the following steps:
-
-1. Get the last portion of the module name: `modname_tail = modname.rpartition('.')[2]`.
-2. Look for a directory named `{modname_tail}` that contains `__init__.py`. If found, create a regular package spec and return the spec.
-3. Look for a file named `{modname_tail}.py`. If found, create and return a file spec.
-4. If found a directory named `{modname_tail}` that is not a regular package, create a namespace package spec and return the spec.
-
-A regular package spec:
+A `FileFinder` instance searches for modules in the directory specified by the path entry. Its `find_spec()` method takes an absolute module name but uses only the portion after the last dot:
 
 ```python
-loader = SourceFileLoader(modname, path_to_init)
+modname_tail = modname.rpartition('.')[2]
+```
+
+This is because the package portion was already used to determine the directory to search in.
+
+`FileFinder` looks for a directory named `{modname_tail}` that contains `__init__.py`, `__init__.pyc` or `__init__` with some shared library file extension like `.so`. It also looks for the files named  `{modname_tail}.py`, `{modname_tail}.pyc` and `{modname_tail}.{any_shared_library_extension}`. If it finds any of these, it creates a spec with the corresponding loader:
+
+* `ExtensionFileLoader` for C extensions
+* `SourceFileLoader` for `.py` files; and
+* `SourcelessFileLoader` for `.pyc` files.
+
+If it finds a directory that is not a regular package, it creates a spec with the loader set to `None`. `PathFinder` collects a namesapce package from such specs.
+
+Here's the summary of [`find_spec()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L1484):
+
+1. Get the last portion of the module name: `modname_tail = modname.rpartition('.')[2]`.
+2. Look for a directory named `{modname_tail}` that contains `__init__.{any_shared_library_extension}`. If found, create and return a regular package spec.
+3. Look for a file named `{modname_tail}.{any_shared_library_extension}` If found, create and return a file spec.
+4. Repeat steps 2 and 3 for `.py` files and for `.pyc` files.
+5. If found a directory named `{modname_tail}` that is not a regular package, create and return a namespace package spec.
+6. Otherswise, return `None`.
+
+A regular package spec is created like this:
+
+```python
+loader = SourceFileLoader(modname, path_to_init) # loader may be different
 spec = ModuleSpec(modname, loader, origin=path_to_init)
 spec.submodule_search_locations = [path_to_package]
 ```
 
-A file spec:
+a file spec like this:
 
 ```python
-loader = SourceFileLoader(modname, path_to_file)
+loader = SourceFileLoader(modname, path_to_file) # loader may be different
 spec = ModuleSpec(modname, loader, origin=path_to_file)
 spec.submodule_search_locations = None
 ```
 
-A namespace package spec:
+and a namespace package like this:
 
 ```
 spec = ModuleSpec(modname, loader=None, origin=None)
 spec.submodule_search_locations = [path_to_package]
 ```
 
+When the module is found and the spec is created, the loading of the module begins. This step is even more techical, so we won't be discussing it in detail and only briefly mention what `SourceFileLoader` does.
 
+## SourceFileLoader
 
- `FileFinder` can create specs for different kinds of modules and installs different loaders to load them:
+The [`create_module()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L833) method of `SourceFileLoader` always returns `None`. This means that `_find_and_load()` creates the new module object itself and initializes it by copying the attributes from the spec.
 
-* `ExtensionFileLoader` to load C extensions
-* `SourceFileLoader` to load `.py` files; and
-* `SourcelessFileLoader` to load `.pyc` files.
+The [`exec_module()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L836) method of `SourceFileLoader` does exactly what you would expect:
 
-Each loader 
+```python
+def exec_module(self, module):
+    """Execute the module."""
+    code = self.get_code(module.__name__)
+    if code is None:
+        raise ImportError('cannot load module {!r} when get_code() '
+                        'returns None'.format(module.__name__))
+    _bootstrap._call_with_frames_removed(exec, code, module.__dict__)
+```
 
-The
+It calls [`get_code()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L909) to create a code object from the file and then calls [`exec()`](https://docs.python.org/3/library/functions.html#exec) to execute the code object in the module's namespace. Note that `get_code()` first tries to read the bytecode from the `.pyc` file in the `__pycache__` directory  and creates this file if it doesn't exist yet.
 
+##How sys.path is calculated
 
+By default, `sys.path` includes the following:
 
-## C modules
+1. An invocation-dependent current directory. If you run a program as a script, it's the directory where the script is located. If you run a program as a module using the `-m` switch, it's the directory from which you run the `python` executable. If you run `python` in the interactive mode or to execute a command using the `-c` switch, the first entry in `sys.path` will be an empty string.
+2. Directories specified by the [PYTHONPATH](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment variable.
+3. A zip archive that contains the standard library, e.g. `/usr/local/lib/python39.zip`. It's used for embeddable installations. Normal installation do not include this archive.
+4. A directory that contains standard modules written in Python, e.g. `/usr/local/lib/python3.9`.
+5. A directory that contains standard modules written in C, e.g.  `/usr/local/lib/python3.9/lib-dynload`.
 
