@@ -103,11 +103,18 @@ By default, Python recognizes the following things as modules:
 5. Python bytecode files (`.pyc` files).
 6. Directories.
 
-Built-in modules are a part of the `python` executable. They are written in C and typically located in the [`Modules/`](https://github.com/python/cpython/tree/3.9/Modules) directory. The `array`, `itertools`, `math` and `sys` modules are all examples of built-in modules. 
+Built-in modules are C modules compiled into the `python` executable. Since they are part of the executable, they are always available. The [`sys.builtin_module_names`](https://docs.python.org/3/library/sys.html#sys.builtin_module_names) tuple stores their names:
+
+```pycon
+$ python -q
+>>> import sys
+>>> sys.builtin_module_names
+('_abc', '_ast', '_codecs', '_collections', '_functools', '_imp', '_io', '_locale', '_operator', '_peg_parser', '_signal', '_sre', '_stat', '_string', '_symtable', '_thread', '_tracemalloc', '_warnings', '_weakref', 'atexit', 'builtins', 'errno', 'faulthandler', 'gc', 'itertools', 'marshal', 'posix', 'pwd', 'sys', 'time', 'xxsubtype')
+```
 
 Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is compiled to a code object and then the binary representation of the code object is incorporated into the executable. The examples of frozen modules are `_frozen_importlib` and `_frozen_importlib_external` . Python freezes them because they implement the core of the import system and, thus, cannot be imported like other Python files.
 
-C extensions are a bit like built-in modules and a bit like Python files. On one hand, they are written in C or C++ and interact with Python via the [Python/C API](https://docs.python.org/3/c-api/index.html). On the other hand, they are not a part of the `python` executable but loaded dynamically during the import. Technically, C extensions are shared libraries that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). They usually named like `modname.so`, but file extensions may be different depending on the platform. On my macOS, for example, any of these extensions will work: `.cpython-39-darwin.so`, `.abi3.so` and `.so`. And on windows, you'll see `.dll` and its variations.
+C extensions are a bit like built-in modules and a bit like Python files. On one hand, they are written in C or C++ and interact with Python via the [Python/C API](https://docs.python.org/3/c-api/index.html). On the other hand, they are not a part of the `python` executable but loaded dynamically during the import. Some standard modules including `array`, `math` and `select` are C extensions. Many others including `asyncio`, `heapq` and `json` are written in Python but call C extensions under the hood. Technically, C extensions are shared libraries that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). They usually named like `modname.so`, but file extensions may be different depending on the platform. On my macOS, for example, any of these extensions will work: `.cpython-39-darwin.so`, `.abi3.so` and `.so`. On Windows, you'll see `.dll` and its variations.
 
 Python bytecode files are typically live in a `__pycache__` directory alongside regular Python files. They are the result of compiling Python code to bytecode. More specifically, a `.pyc` file contains some metadata followed by a marshalled code object of a module. Its purpose is to reduce module's loading time by skipping the compilation stage. When Python imports a `.py` file, it first searches for a `.pyc` file in the `__pycache__` directory and executes it. If the `.pyc` file does not exist, Python compiles the code and creates it. However, we wouldn't call `.pyc` files modules if we couldn't execute and import them directly. Surprisingly, we can:
 
@@ -900,9 +907,18 @@ It calls [`get_code()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0
 
 By default, `sys.path` includes the following:
 
-1. An invocation-dependent current directory. If you run a program as a script, it's the directory where the script is located. If you run a program as a module using the `-m` switch, it's the directory from which you run the `python` executable. If you run `python` in the interactive mode or to execute a command using the `-c` switch, the first entry in `sys.path` will be an empty string.
-2. Directories specified by the [PYTHONPATH](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment variable.
+1. An invocation-dependent current directory. If you run a program as a script, it's the directory where the script is located. If you run a program as a module using the `-m` switch, it's the directory from which you run the `python` executable. If you run `python` in the interactive mode or execute a command using the `-c` switch, the first entry in `sys.path` will be an empty string.
+2. Directories specified by the [`PYTHONPATH`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONPATH) environment variable.
 3. A zip archive that contains the standard library, e.g. `/usr/local/lib/python39.zip`. It's used for embeddable installations. Normal installation do not include this archive.
 4. A directory that contains standard modules written in Python, e.g. `/usr/local/lib/python3.9`.
-5. A directory that contains standard modules written in C, e.g.  `/usr/local/lib/python3.9/lib-dynload`.
+5. A directory that contains standard C extensions, e.g.  `/usr/local/lib/python3.9/lib-dynload`.
+6. Site-specific directories added by the [`site`](https://docs.python.org/3/library/site.html) module, e.g. `/usr/local/lib/python3.9/site-packages`. That's where third-party modules installed by tools like `pip` go.
+
+To construct these paths, Python first determines the location of the `python` executable. If we run the executable by specifying the path, Python already knows the location. Otherwise, it searches for the executable in `PATH`. Eventually, it gets a path like `/usr/local/bin/python3`. Then it tries to find out where the standard modules are located. It moves one directory up from the executable until it finds the `lib/python{X.Y}/os.py` file. This file denotes the directory containing standard modules written in Python. The same process is repeated to find the directory containing standard C extensions, but the `lib/python{X.Y}/lib-dynload/` directory is used as a marker this time. A `pyvenv.cfg` file alongside the executable or one directory up may specify another directory to start the search from. And the [`PYTHONHOME`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHOME) environment variable can be used to specify the "base" directory so that Python doesn't need to perform the search at all.
+
+The `site` standard module takes the "base" directory found during the search or specified by `PYTHONHOME` and prepends `lib/python{X.Y}/site-packages` to it to get the directory containing third-party modules. This directory may contain `.pth` path configuration files that tell `site` to add more site-specific directories to `sys.path`. The added directories may contain `.pth` files as well so that the process repeats recursively.
+
+If the `pyvenv.cfg` file exists, then `site` uses its directory as the "base" directory. By this mechanism, Python supports virtual environments that have their own site-specific directories but share the standard library with the system-wide Python installation. Check out [the docs on `site`](https://docs.python.org/3/library/site.html)  and [PEP 405](https://www.python.org/dev/peps/pep-0405/) to learn more.
+
+The process of calculating `sys.path` is even more nuanced than I described. If you want to know those nuances, see the answer by djhaskin987 to [this StackOverflow question](https://stackoverflow.com/questions/897792/where-is-pythons-sys-path-initialized-from/38403654#38403654).
 
