@@ -879,19 +879,17 @@ All this complicated logic of `PathFinder` is unnecessary most of the time. Typi
 
 A `FileFinder` instance searches for modules in the directory specified by the path entry. A path entry can either be an absolute path or a relative path. In the latter case, it's resolved with respect to the current working directory.
 
-The `find_spec()` method of `FileFinder` takes an absolute module name but uses only the portion after the last dot:
+The `find_spec()` method of `FileFinder` takes an absolute module name but needs only the portion after the last dot since the package portion was already used to determine the directory to search in. So it extracts this portion:
 
 ```python
 modname_tail = modname.rpartition('.')[2]
 ```
 
-This is because the package portion was already used to determine the directory to search in.
+Then it performs the search. It looks for a directory named `{modname_tail}` that contains `__init__.py`, `__init__.pyc` or `__init__` with some shared library file extension like `.so`. It also looks for files named  `{modname_tail}.py`, `{modname_tail}.pyc` and `{modname_tail}.{any_shared_library_extension}`. If it finds any of these, it creates a spec with the corresponding loader:
 
-`FileFinder` looks for a directory named `{modname_tail}` that contains `__init__.py`, `__init__.pyc` or `__init__` with some shared library file extension like `.so`. It also looks for files named  `{modname_tail}.py`, `{modname_tail}.pyc` and `{modname_tail}.{any_shared_library_extension}`. If it finds any of these, it creates a spec with the corresponding loader:
-
-* `ExtensionFileLoader` for C extensions
-* `SourceFileLoader` for `.py` files; and
-* `SourcelessFileLoader` for `.pyc` files.
+* `ExtensionFileLoader` for a C extension
+* `SourceFileLoader` for a `.py` file; and
+* `SourcelessFileLoader` for a `.pyc` file.
 
 If it finds a directory that is not a regular package, it creates a spec with the loader set to `None`. `PathFinder` collects a single namespace package spec from such specs.
 
@@ -927,11 +925,7 @@ spec = ModuleSpec(modname, loader=None, origin=None)
 spec.submodule_search_locations = [path_to_package]
 ```
 
-When the module is found and the spec is created, the loader begins to do its job. 
-
-??
-
-We'll briefly discuss what `SourceFileLoader` does, and you can study other loaders 
+Once the spec is created, the loading of the module begins. `ExtensionFileLoader` is worth studying, but we should leave it for another post on C extensions. `SourcelessFileLoader` is not very interesting, so we won't discuss it either. `SourceFileLoader` is the most relevant for us because it loads `.py` files. We'll mention how it works.
 
 ## SourceFileLoader
 
@@ -949,9 +943,17 @@ def exec_module(self, module):
     _bootstrap._call_with_frames_removed(exec, code, module.__dict__)
 ```
 
-It calls [`get_code()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L909) to create a code object from the file and then calls [`exec()`](https://docs.python.org/3/library/functions.html#exec) to execute the code object in the module's namespace. Note that `get_code()` first tries to read the bytecode from the `.pyc` file in the `__pycache__` directory  and creates this file if it doesn't exist yet.
+It calls [`get_code()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap_external.py#L909) to create a code object from the file and then calls [`exec()`](https://docs.python.org/3/library/functions.html#exec) to execute the code object in the module's namespace. Note that `get_code()` first tries to read the bytecode from the `.pyc` file in the `__pycache__` directory and creates this file if it doesn't exist yet.
 
-##How sys.path is calculated
+That's it! We completed our study of finders and loaders and saw what happens during the import process. Let's summarize what we've learned.
+
+## Summary of the import process
+
+Any import statement compiles to a series of bytecode instructions, one of which, called `IMPORT_NAME`, imports the module by calling the built-in `__import__()` function. If the module was specified with a relative name, `__import__()` first resolves the relative name to an absolute one using the `__package__` attribute of the current module. Then it looks up the module in `sys.modules` and returns the module if it's there. If the module is not there, `__import__()` tries to find the module's spec. It calls the `find_spec()` method of every finder listed in `sys.meta_path` until some finder returns the spec. If the module is a built-in module, `BuiltinImporter` returns the spec. If the module is a frozen module, `FrozenImporter` returns the spec. Otherwise, `PathFinder` searches for the module on the module search path, which is either the `__path__` attribute of the parent module or `sys.path` if the former is undefined. `PathFinder`  iterates over the path entries and, for each entry, calls the `find_spec()` method of a corresponding path entry finder. To get the corresponding path entry finder, `PathFinder` passes the path entry to callables listed in `sys.path_hooks`. If the path entry is a path to a directory, one of the callables returns a `FileFinder` instance that seaches for modules in that directory. `PathFinder` calls its `find_spec()`. The `find_spec()` method of `FileFinder`  checks if the directory specified by the path entry contains a C extension, a `.py` file, a `.pyc` file or a directory named after the module. If it finds anything, it create a module spec with the corresponding loader. When `__import__()` gets the spec, it calls the loader's `create_module()` method to create a module object and then the `exec_module()` method to execute the module. Finally, it puts the module in `sys.modules` and returns the module.
+
+Do you have any questions left? I have one.
+
+##What's in sys.path?
 
 By default, `sys.path` includes the following:
 
@@ -962,11 +964,13 @@ By default, `sys.path` includes the following:
 5. A directory that contains standard C extensions, e.g.  `/usr/local/lib/python3.9/lib-dynload`.
 6. Site-specific directories added by the [`site`](https://docs.python.org/3/library/site.html) module, e.g. `/usr/local/lib/python3.9/site-packages`. That's where third-party modules installed by tools like `pip` go.
 
-To construct these paths, Python first determines the location of the `python` executable. If we run the executable by specifying the path, Python already knows the location. Otherwise, it searches for the executable in `PATH`. Eventually, it gets a path like `/usr/local/bin/python3`. Then it tries to find out where the standard modules are located. It moves one directory up from the executable until it finds the `lib/python{X.Y}/os.py` file. This file denotes the directory containing standard modules written in Python. The same process is repeated to find the directory containing standard C extensions, but the `lib/python{X.Y}/lib-dynload/` directory is used as a marker this time. A `pyvenv.cfg` file alongside the executable or one directory up may specify another directory to start the search from. And the [`PYTHONHOME`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHOME) environment variable can be used to specify the "base" directory so that Python doesn't need to perform the search at all.
+To construct these paths, Python first determines the location of the `python` executable. If we run the executable by specifying the path, Python already knows the location. Otherwise, it searches for the executable in `PATH`. Eventually, it gets something like `/usr/local/bin/python3`. Then it tries to find out where the standard modules are located. It moves one directory up from the executable until it finds the `lib/python{X.Y}/os.py` file. This file denotes the directory containing standard modules written in Python. The same process is repeated to find the directory containing standard C extensions, but the `lib/python{X.Y}/lib-dynload/` directory is used as a marker this time. A `pyvenv.cfg` file alongside the executable or one directory up may specify another directory to start the search from. And the [`PYTHONHOME`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHOME) environment variable can be used to specify the "base" directory so that Python doesn't need to perform the search at all.
 
 The `site` standard module takes the "base" directory found during the search or specified by `PYTHONHOME` and prepends `lib/python{X.Y}/site-packages` to it to get the directory containing third-party modules. This directory may contain `.pth` path configuration files that tell `site` to add more site-specific directories to `sys.path`. The added directories may contain `.pth` files as well so that the process repeats recursively.
 
-If the `pyvenv.cfg` file exists, then `site` uses its directory as the "base" directory. By this mechanism, Python supports virtual environments that have their own site-specific directories but share the standard library with the system-wide Python installation. Check out [the docs on `site`](https://docs.python.org/3/library/site.html)  and [PEP 405](https://www.python.org/dev/peps/pep-0405/) to learn more.
+If the `pyvenv.cfg` file exists, `site` uses the directory containing this file as the "base" directory. Note that this is not the directory that `pyvenv.cfg` specifies. By this mechanism, Python supports virtual environments that have their own site-specific directories but share the standard library with the system-wide installation. Check out [the docs on `site`](https://docs.python.org/3/library/site.html)  and [PEP 405 -- Python Virtual Environments](https://www.python.org/dev/peps/pep-0405/) to learn more.
 
-The process of calculating `sys.path` is even more nuanced than I described. If you want to know those nuances, see the answer by djhaskin987 to [this StackOverflow question](https://stackoverflow.com/questions/897792/where-is-pythons-sys-path-initialized-from/38403654#38403654).
+The process of calculating `sys.path` is even more nuanced than I described. If you want to know those nuances, see [this StackOverflow answer](https://stackoverflow.com/questions/897792/where-is-pythons-sys-path-initialized-from/38403654#38403654).
+
+## Conclusion
 
