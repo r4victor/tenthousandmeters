@@ -2,7 +2,7 @@ Title: Python behind the scenes #11: how the Python import system works
 Date: 2021-06-22 6:06
 Tags: Python behind the scenes, Python, CPython
 
-If you ask me to name the most misunderstood feature of Python, I will answer without a second thought: the Python import system. Just remember how many times you used relative imports and got something like `ImportError: attempted relative import with no known parent package`; or tried to figure out how to structure a project so that all the imports work correctly; or hacked `sys.path` when you couldn't find a better solution. Every Python programmer experienced something like this, and popular StackOverflow questions, such us [Importing files from different folder](https://stackoverflow.com/questions/4383571/importing-files-from-different-folder) (1822 votes), [Relative imports in Python 3](https://stackoverflow.com/questions/16981921/relative-imports-in-python-3) (1064 votes) and [Relative imports for the billionth time](https://stackoverflow.com/questions/14132789/relative-imports-for-the-billionth-time) (993 votes), are a good indicator of that.
+If you ask me to name the most misunderstood aspect of Python, I will answer without a second thought: the Python import system. Just remember how many times you used relative imports and got something like `ImportError: attempted relative import with no known parent package`; or tried to figure out how to structure a project so that all the imports work correctly; or hacked `sys.path` when you couldn't find a better solution. Every Python programmer experienced something like this, and popular StackOverflow questions, such us [Importing files from different folder](https://stackoverflow.com/questions/4383571/importing-files-from-different-folder) (1822 votes), [Relative imports in Python 3](https://stackoverflow.com/questions/16981921/relative-imports-in-python-3) (1064 votes) and [Relative imports for the billionth time](https://stackoverflow.com/questions/14132789/relative-imports-for-the-billionth-time) (993 votes), are a good indicator of that.
 
 The Python import system doesn't just seem complicated – it is complicated. So even though the [documentation](https://docs.python.org/3/reference/import.html) is really good, it doesn't give you the full picture of what's going on. The only way to get such a picture is to study what happens behind the scenes when Python executes an import statement. And that's what we're going to do today.
 
@@ -974,3 +974,18 @@ The process of calculating `sys.path` is even more nuanced than I described. If 
 
 ## Conclusion
 
+If you ask me to name the most misunderstood aspect of Python, I will answer without a second thought: the Python import system. Until I wrote this post, I couldn't really tell what a module is exactly; what a package is; what relative imports are relative to; how various customization points such as `sys.meta_path`, `sys.path_hooks` and `sys.path` fit together; and how `sys.path` is calculated. What can I tell now? First, modules and packages are simple concepts. I blame my misunderstanding on the docs that oversimplify the reality [like this](https://docs.python.org/3/tutorial/modules.html#modules):
+
+> A module is a file containing Python definitions and statements.
+
+or omit the details [like this](https://docs.python.org/3/reference/import.html#packages):
+
+> You can think of packages as the directories on a file system and modules as files within directories, but don’t take this analogy too literally since packages and modules need not originate from the file system. For the purposes of this documentation, we’ll use this convenient analogy of directories and files.
+
+Relative imports are indeed unintuitive, but once you understand that they are just a way to specify a module name relative to the current package name, you should have no problems with them.
+
+Meta path finders, path entry finders, path hooks, path entries and loaders make the import system more complex but also make it more flexible. [PEP 302](https://www.python.org/dev/peps/pep-0302/) and [PEP 451](https://www.python.org/dev/peps/pep-0451/) give some rationale for this trade-off.
+
+What's about `sys.path`? It's crucial to understand what's there when you import a module, yet I couldn't find a satisfactory explanation in the docs. Perhaps, it's too complicated to describe precisely. But I think that the approximation like the one we gave in the previous section is good enough for practical purposes.
+
+Overall, studying the import system was usefull but not that fun. I think we should study something more exciting next time. How about async/await?
