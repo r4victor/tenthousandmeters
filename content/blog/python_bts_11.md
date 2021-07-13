@@ -1,14 +1,17 @@
 Title: Python behind the scenes #11: how the Python import system works
 Date: 2021-06-22 6:06
 Tags: Python behind the scenes, Python, CPython
+Summary:If you ask me to name the most misunderstood aspect of Python, I will answer without a second thought: the Python import system. Just remember how many times you used relative imports and got something like `ImportError: attempted relative import with no known parent package`; or tried to figure out how to structure a project so that all the imports work correctly; or hacked `sys.path` when you couldn't find a better solution. Every Python programmer experienced something like this, and popular StackOverflow questions, such us [Importing files from different folder](https://stackoverflow.com/questions/4383571/importing-files-from-different-folder) (1822 votes), [Relative imports in Python 3](https://stackoverflow.com/questions/16981921/relative-imports-in-python-3) (1064 votes) and [Relative imports for the billionth time](https://stackoverflow.com/questions/14132789/relative-imports-for-the-billionth-time) (993 votes), are a good indicator of that.<br><br>The Python import system doesn't just seem complicated – it is complicated. So even though the [documentation](https://docs.python.org/3/reference/import.html) is really good, it doesn't give you the full picture of what's going on. The only way to get such a picture is to study what happens behind the scenes when Python executes an import statement. And that's what we're going to do today.
 
 If you ask me to name the most misunderstood aspect of Python, I will answer without a second thought: the Python import system. Just remember how many times you used relative imports and got something like `ImportError: attempted relative import with no known parent package`; or tried to figure out how to structure a project so that all the imports work correctly; or hacked `sys.path` when you couldn't find a better solution. Every Python programmer experienced something like this, and popular StackOverflow questions, such us [Importing files from different folder](https://stackoverflow.com/questions/4383571/importing-files-from-different-folder) (1822 votes), [Relative imports in Python 3](https://stackoverflow.com/questions/16981921/relative-imports-in-python-3) (1064 votes) and [Relative imports for the billionth time](https://stackoverflow.com/questions/14132789/relative-imports-for-the-billionth-time) (993 votes), are a good indicator of that.
 
 The Python import system doesn't just seem complicated – it is complicated. So even though the [documentation](https://docs.python.org/3/reference/import.html) is really good, it doesn't give you the full picture of what's going on. The only way to get such a picture is to study what happens behind the scenes when Python executes an import statement. And that's what we're going to do today.
 
+**Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
+
 ## Our plan
 
-Before we begin, let me present you a more detailed version of our plan. First, we'll discuss the core concepts of the import system: modules, submodules, packages, `from <> import <>` statements, relative imports, and so on. Then we'll desugar different import statements and see that they all eventually call the `__import__()` function. Finally, we'll study how the default implementation of `__import__()` works. Let's go!
+Before we begin, let me present you a more detailed version of our plan. First, we'll discuss the core concepts of the import system: modules, submodules, packages, `from <> import <>` statements, relative imports, and so on. Then we'll desugar different import statements and see that they all eventually call the built-in `__import__()` function. Finally, we'll study how the default implementation of `__import__()` works. Let's go!
 
 ## Modules and module objects
 
@@ -18,7 +21,7 @@ Consider a simple import statement:
 import m
 ```
 
-What do you think it does? You may say that it imports a module named `"m"` and assigns the module to the variable `m`. And you'll be right. But what is a module exactly? What gets assigned to the variable? In order to answer these questions, we need to give a bit more precise explanation: the statement `import m` searches for a module named `"m"`, creates a module object for that module, and assigns the module object to the variable. See how we differentiated between a module and a module object. We can now discuss what they are.
+What do you think it does? You may say that it imports a module named `m` and assigns the module to the variable `m`. And you'll be right. But what is a module exactly? What gets assigned to the variable? In order to answer these questions, we need to give a bit more precise explanation: the statement `import m` searches for a module named `m`, creates a module object for that module, and assigns the module object to the variable. See how we differentiated between a module and a module object. We can now define these terms.
 
 A **module** is anything that Python considers a module and knows how to create a module object for. This includes things like Python files, directories and built-in modules written in C. We'll look at the full list in the next section.
 
@@ -37,9 +40,9 @@ typedef struct {
 } PyModuleObject;
 ```
 
-The `md_dict` field stores the module's dictionary. And other fields are not really important for our discussion.
+The `md_dict` field stores the module's dictionary. Other fields are not really important for our discussion.
 
-Python always creates module objects implicitly for us. To see that there is nothing magical about this process, let's create one module object ourselves. We usually create Python objects by calling their types, like `MyClass()` or `set()`. The type of a module object is `PyModule_Type` in the C code but it's not available in Python as a built-in. Fortunately, such "unavailable" types can be found in the [`types`](https://docs.python.org/3/library/types.html) standard module:
+Python creates module objects implicitly for us. To see that there is nothing magical about this process, let's create a module object ourselves. We usually create Python objects by calling their types, like `MyClass()` or `set()`. The type of a module object is `PyModule_Type` in the C code but it's not available in Python as a built-in. Fortunately, such "unavailable" types can be found in the [`types`](https://docs.python.org/3/library/types.html) standard module:
 
 ```pycon
 $ python -q
@@ -48,7 +51,7 @@ $ python -q
 <class 'module'>
 ```
 
-How does the `types` module defines `ModuleType`? It just imports the `sys` module (any module will do) and then calls `type()` on the module object returned:
+How does the `types` module define `ModuleType`? It just imports the `sys` module (any module will do) and then calls `type()` on the module object returned. We can do it as well:
 
 ```pycon
 >>> import sys
@@ -72,7 +75,7 @@ A newly created module object is not very interesting but has some special attri
 {'__name__': 'm', '__doc__': None, '__package__': None, '__loader__': None, '__spec__': None}
 ```
 
-Most of these special attributes are mainly used by the import system itself, but some are used in application code as well. The `__name__` attribute, for example, is often used to get the name of the current module:
+Most of these special attributes are mainly used by the import system itself, but some are used in the application code as well. The `__name__` attribute, for example, is often used to get the name of the current module:
 
 ```pycon
 >>> __name__
@@ -88,7 +91,7 @@ Notice that `__name__` is available as a global variable. This observation may s
 True
 ```
 
-The current module acts as a namespace for the execution of Python code. When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file directly, it first creates a special module called `"__main__"` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the **current module **from the perspective of the executing code.
+The current module acts as a namespace for the execution of Python code. When Python imports a Python file, it creates a new module object and then executes the contents of the file using the dictionary of the module object as the dictionary of global variables. Similarly, when Python executes a Python file directly, it first creates a special module called `__main__` and then uses its dictionary as the dictionary of global variables. Thus, global variables are always attributes of some module, and this module is considered to be the **current module **from the perspective of the executing code.
 
 ## Different kinds of modules
 
@@ -110,9 +113,9 @@ $ python -q
 ('_abc', '_ast', '_codecs', '_collections', '_functools', '_imp', '_io', '_locale', '_operator', '_peg_parser', '_signal', '_sre', '_stat', '_string', '_symtable', '_thread', '_tracemalloc', '_warnings', '_weakref', 'atexit', 'builtins', 'errno', 'faulthandler', 'gc', 'itertools', 'marshal', 'posix', 'pwd', 'sys', 'time', 'xxsubtype')
 ```
 
-Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is [compiled]({filename}/blog/python_bts_02.md) to a code object and then the binary representation of the code object is incorporated into the executable. The examples of frozen modules are `_frozen_importlib` and `_frozen_importlib_external` . Python freezes them because they implement the core of the import system and, thus, cannot be imported like other Python files.
+Frozen modules are too a part of the `python` executable, but they are written in Python. Python code is [compiled]({filename}/blog/python_bts_02.md) to a code object and then the [marshalled](https://docs.python.org/3/library/marshal.html) code object is incorporated into the executable. The examples of frozen modules are `_frozen_importlib` and `_frozen_importlib_external` . Python freezes them because they implement the core of the import system and, thus, cannot be imported like other Python files.
 
-C extensions are a bit like built-in modules and a bit like Python files. On one hand, they are written in C or C++ and interact with Python via the [Python/C API](https://docs.python.org/3/c-api/index.html). On the other hand, they are not a part of the executable but loaded dynamically during the import. Some standard modules including `array`, `math` and `select` are C extensions. Many others including `asyncio`, `heapq` and `json` are written in Python but call C extensions under the hood. Technically, C extensions are shared libraries that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). They usually named like `modname.so`, but the file extensions may be different depending on the platform. On my macOS, for example, any of these extensions will work: `.cpython-39-darwin.so`, `.abi3.so`, `.so`. And on Windows, you'll see `.dll` and its variations.
+C extensions are a bit like built-in modules and a bit like Python files. On one hand, they are written in C or C++ and interact with Python via the [Python/C API](https://docs.python.org/3/c-api/index.html). On the other hand, they are not a part of the executable but loaded dynamically during the import. Some standard modules including `array`, `math` and `select` are C extensions. Many others including `asyncio`, `heapq` and `json` are written in Python but call C extensions under the hood. Technically, C extensions are shared libraries that expose a so called [initialization function](https://docs.python.org/3/extending/building.html#c.PyInit_modulename). They are usually named like `modname.so`, but the file extension may be different depending on the platform. On my macOS, for example, any of these extensions will work: `.cpython-39-darwin.so`, `.abi3.so`, `.so`. And on Windows, you'll see `.dll` and its variations.
 
 Python bytecode files are typically live in a `__pycache__` directory alongside regular Python files. They are the result of compiling Python code to bytecode. More specifically, a `.pyc` file contains some metadata followed by a marshalled code object of a module. Its purpose is to reduce module's loading time by skipping the compilation stage. When Python imports a `.py` file, it first searches for a corresponding `.pyc` file in the `__pycache__` directory and executes it. If the `.pyc` file does not exist, Python compiles the code and creates the file.
 
@@ -133,7 +136,7 @@ As we'll later see, we can customize the import system to support even more kind
 
 ## Submodules and packages
 
-If module names were limited to simple identifiers like `"mymodule"` or `"utils"`, then they all must have been unique, and we would have to think very hard every time we give a new file a name. For this reason, Python allows modules to have submodules and module names to contain dots.
+If module names were limited to simple identifiers like `mymodule` or `utils`, then they all must have been unique, and we would have to think very hard every time we give a new file a name. For this reason, Python allows modules to have submodules and module names to contain dots.
 
 When Python executes this statements:
 
@@ -141,7 +144,7 @@ When Python executes this statements:
 import a.b
 ```
 
-it first imports the module `"a"` and then the submodule `"a.b"`. It adds the submodule to the module's dictionary and assigns the module to the variable `a`, so we can access the submodule as a module's attribute.
+it first imports the module `a` and then the submodule `a.b`. It adds the submodule to the module's dictionary and assigns the module to the variable `a`, so we can access the submodule as a module's attribute.
 
 A module that can have submodules is called a **package**. Technically, a package is a module that has a `__path__` attribute. This attribute tells Python where to look for submodules. When Python imports a top-level module, it searches for the module in the directories and ZIP archives listed in [`sys.path`](https://docs.python.org/3/library/sys.html#sys.path). But when it imports a submodule, it uses the `__path__` attribute of the parent module instead of `sys.path`.
 
@@ -167,7 +170,7 @@ from mylibrary.module2 import func2
 
 It may be something you want, but you may also want to allow the users to import the functions like this:
 
-```
+```python
 from mylibrary import func1, func2
 ```
 
@@ -195,7 +198,7 @@ $ python -q
 
 ### Namespace packages
 
-Before version 3.3, Python had only regular packages. Directories without `__init__.py` were not considered packages at all. And this was a problem because [people didn't like](https://mail.python.org/pipermail/python-dev/2006-April/064400.html) to create empty `__init__.py` files. So [PEP 420](https://www.python.org/dev/peps/pep-0420/) made these files unnecessary by introducing **namespace packages **in Python 3.3.
+Before version 3.3, Python had only regular packages. Directories without `__init__.py` were not considered packages at all. And this was a problem because [people didn't like](https://mail.python.org/pipermail/python-dev/2006-April/064400.html) to create empty `__init__.py` files. [PEP 420](https://www.python.org/dev/peps/pep-0420/) made these files unnecessary by introducing **namespace packages **in Python 3.3.
 
 Namespace packages solved another problem as well. They allowed developers to place contents of a package across multiple locations. For example, if you have the following directory structure:
 
@@ -234,7 +237,7 @@ Besides importing modules, we can also import module attributes using a `from <>
 from module import func, Class, submodule
 ```
 
-This statement imports a module named `"module"` and assign the specified attributes to the corresponding variables:
+This statement imports a module named `module` and assign the specified attributes to the corresponding variables:
 
 ```python
 func = module.func
@@ -248,13 +251,13 @@ Note that the `module` variable is not available after the import as if it was d
 del module
 ```
 
-When Python sees that a module doesn't have a specified attribute, it considers the attribute to be a submodule and tries to import it. So if `module` defines `func` and `Class` but not `submodule`, Python will try to import `"module.submodule"`.
+When Python sees that a module doesn't have a specified attribute, it considers the attribute to be a submodule and tries to import it. So if `module` defines `func` and `Class` but not `submodule`, Python will try to import `module.submodule`.
 
 ##Wildcard imports
 
 If we don't want to specify explicitly the names to import from a module, we can use the wildcard form of import:
 
-```
+```python
 from module import *
 ```
 
@@ -275,7 +278,7 @@ The constructions like `..` and `..a.b` are relative module names, but what are 
 
 The `__package__` attribute of a module stores the name of the package to which the module belongs. If the module is a package, then the module belongs to itself, and  `__package__` is just the module's name (`__name__`). If the module is a submodule, then it belongs to the parent module, and `__package__` is set to the parent module's name. Finally, if the module is not a package nor a submodule, then its package is undefined. In this case, `__package__` can be set to an empty string (e.g. the module is a top-level module) or `None` (e.g. the module runs as a script).
 
-A relative module name is a module name preceeded by some number of dots. One leading dot represents the current package. So, when `__package__` is defined, the following statement:
+A relative module name is a module name preceded by some number of dots. One leading dot represents the current package. So, when `__package__` is defined, the following statement:
 
 ```python
 from . import a
@@ -285,7 +288,7 @@ works as if the dot was replaced with the value of `__package__`.
 
 Each extra dot tells Python to move one level up from `__package__` . If `__package__` is set to `"a.b"`, then this statement: 
 
-```
+```python
 from .. import d
 ```
 
@@ -293,7 +296,7 @@ works as if the dots were replaced with `a`.
 
 You cannot move outside the top-level package. If you try this:
 
-```
+```python
 from ... import e
 ```
 
@@ -311,19 +314,19 @@ Obviously, relative imports break when `__package__` is not defined at all. In t
 ImportError: attempted relative import with no known parent package
 ```
 
-You most commonly see it when you run a program with relative imports as a script. Since you specify which program to run with a filesystem path and not with a module name, and since Python needs a module name to calculate `__package__`, the code is executed in the `"__main__"` module whose `__package__` attribute is set to `None`.
+You most commonly see it when you run a program with relative imports as a script. Since you specify which program to run with a filesystem path and not with a module name, and since Python needs a module name to calculate `__package__`, the code is executed in the `__main__` module whose `__package__` attribute is set to `None`.
 
 ## Running programs as modules
 
-The standard way to avoid import erros when running a program with relative imports is to run the program as a module using the `-m` switch:
+The standard way to avoid import errors when running a program with relative imports is to run it as a module using the `-m` switch:
 
 ```pycon
 $ python -m package.module
 ```
 
-The `-m` switch tells Python to use the same mechanism to find the module as during the import. Python gets a module name and is able to calculate the current package. For example, if we run a module named `"package.module"`, where `module` refers to a regular `.py` file, then the code will be executed in the `"__main__"` module whose `__package__` attribute is set to `"package"`. You can read more about the `-m` switch in [the docs](https://docs.python.org/3/using/cmdline.html) and in [PEP 338](https://www.python.org/dev/peps/pep-0338/).
+The `-m` switch tells Python to use the same mechanism to find the module as during the import. Python gets a module name and is able to calculate the current package. For example, if we run a module named `package.module`, where `module` refers to a regular `.py` file, then the code will be executed in the `__main__` module whose `__package__` attribute is set to `"package"`. You can read more about the `-m` switch in [the docs](https://docs.python.org/3/using/cmdline.html) and in [PEP 338](https://www.python.org/dev/peps/pep-0338/).
 
-Alright. This was a warm up. Now, we're going to see what exactly happens when we import a module.
+Alright. This was a warm-up. Now we're going to see what exactly happens when we import a module.
 
 ## Desugaring the import statement
 
@@ -331,7 +334,7 @@ If we desugar any import statement, we'll see that it eventually calls the built
 
 Python allows us to set `__import__()` to a custom function, so we can change the import process completely. Here's, for example, a change that just breaks everything:
 
-```
+```pycon
 >>> import builtins
 >>> builtins.__import__ = None
 >>> import math
@@ -340,9 +343,9 @@ Traceback (most recent call last):
 TypeError: 'NoneType' object is not callable
 ```
 
-You rarely see people overriding `__import__()` for reasons other than logging or debugging. The default implementation already provides powerfull mechanisms for customization, and we'll focus solely on it.
+You rarely see people overriding `__import__()` for reasons other than logging or debugging. The default implementation already provides powerful mechanisms for customization, and we'll focus solely on it.
 
-The default implementation of `__import__()` is `importlib.__import__()`. Well, it's almost true. The [`importlib`](https://docs.python.org/3/library/importlib.html#module-importlib) module is a standard module that implements the core of the import system. It's written in Python because the import process involves path handling and other things that you would prefer to do in Python rather than in C. But some functions of `importlib` are ported to C for performance reasons. And default `__import__()` actually calls a C port of `importlib.__import__()`. For our purposes, we can safely ingore the difference and just study the Python version. Before we do that, let's see how exactly different import statements call `__import__()`.
+The default implementation of `__import__()` is `importlib.__import__()`. Well, it's almost true. The [`importlib`](https://docs.python.org/3/library/importlib.html#module-importlib) module is a standard module that implements the core of the import system. It's written in Python because the import process involves path handling and other things that you would prefer to do in Python rather than in C. But some functions of `importlib` are ported to C for performance reasons. And default `__import__()` actually calls a C port of `importlib.__import__()`. For our purposes, we can safely ingore the difference and just study the Python version. Before we do that, let's see how different import statements call `__import__()`.
 
 ### Simple imports
 
@@ -384,7 +387,7 @@ case TARGET(IMPORT_NAME): {
 }
 ```
 
-All the action happens in the `import_name()` function. It calls `__import__()` to do the work, but if `__import__()` wasn't overriden, it takes a shortcut and calls the C port of `importlib.__import__()` called `PyImport_ImportModuleLevelObject()`. Here's how this logic is implemented in the code:
+All the action happens in the `import_name()` function. It calls `__import__()` to do the work, but if `__import__()` wasn't overridden, it takes a shortcut and calls the C port of `importlib.__import__()` called `PyImport_ImportModuleLevelObject()`. Here's how this logic is implemented in the code:
 
 ```C
 static PyObject *
@@ -433,7 +436,7 @@ import_name(PyThreadState *tstate, PyFrameObject *f,
 
 If you carefully examine all of the above, you'll be able to conclude that this statement:
 
-```
+```python
 import m
 ```
 
@@ -443,7 +446,7 @@ is actually equivalent to this code:
 m = __import__('m', globals(), locals(), None, 0)
 ```
 
-the meaning of the arguments according to the docsting of `importlib.__import__()` being the following:
+the meaning of the arguments according to the docstring of `importlib.__import__()` being the following:
 
 ```python
 def __import__(name, globals=None, locals=None, fromlist=(), level=0):
@@ -488,7 +491,7 @@ and is equivalent to the following code:
 a = __import__('a.b.c', globals(), locals(), None, 0)
 ```
 
-The arguments to ` __import__()` are passed in the same way as in the case of `import m`. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we would expect, `__import__()` returns the top-level module in this case.
+The arguments to ` __import__()` are passed in the same way as in the case of `import m`. The only difference is that the VM assigns the result of `__import__()` not to the name of the module (`a.b.c` is not a valid variable name) but to the first identifier before the dot, i.e. `a`. As we'll see, `__import__()` returns the top-level module in this case.
 
 ### from <> import <>
 
@@ -522,7 +525,7 @@ g = a_b.g
 del a_b
 ```
 
-The names to import are passed as `fromlist`. When `fromlist` is not empty, `__import__()` returns not the top-level module as in the case of a simple import but the specifed module like `a.b`.
+The names to import are passed as `fromlist`. When `fromlist` is not empty, `__import__()` returns not the top-level module as in the case of a simple import but the specified module like `a.b`.
 
 ### from <> import *
 
@@ -534,12 +537,13 @@ from m import *
 
 compiles to the following bytecode:
 
-```pycon
+```text
 $ echo "from m import *" | python -m dis
   1           0 LOAD_CONST               0 (0)
               2 LOAD_CONST               1 (('*',))
               4 IMPORT_NAME              0 (m)
               6 IMPORT_STAR
+...
 ```
 
 and is equivalent to the following code:
@@ -574,6 +578,7 @@ $ echo "from .. import f" | python -m dis
               6 IMPORT_FROM              1 (f)
               8 STORE_NAME               1 (f)
              10 POP_TOP
+...
 ```
 
 and is equivalent to the following code:
@@ -596,19 +601,17 @@ The algorithm that [`__import__()`](https://github.com/python/cpython/blob/57c6c
 
 1. If `level > 0`, resolve a relative module name to an absolute module name. 
 2. Import the module.
-3. If `fromlist` is empty, drop everything after the first dot from the module name to get the name of the top-level module name. Import and return the top-level module. 
-4. If `fromlist` contains names that are not in the module's dictionary, import them as submodules. That is, if `submodule` is not in the module's dictionary, import `"module.submodule"`.  If `"*"`  is in `fromlist`, use module's `__all__` as new `fromlist` and repeat this step.
+3. If `fromlist` is empty, drop everything after the first dot from the module name to get the name of the top-level module. Import and return the top-level module. 
+4. If `fromlist` contains names that are not in the module's dictionary, import them as submodules. That is, if `submodule` is not in the module's dictionary, import `module.submodule`.  If `"*"`  is in `fromlist`, use module's `__all__` as new `fromlist` and repeat this step.
 5. Return the module.
 
 Step 2 is where all the action happens. We'll focus on it in the remaining sections, but let us first elaborate on step 1.
 
 ### Resolving relative names
 
-To resolve a relative module name, `__import__()` needs to know the current package of the module from which the import statement was executed. So it looks up `__package__` in `globals`. If `__package__` is `None`, `__import__()` tries to deduce the current package from `__name__`. Since Python always sets `__package__` correctly, this fallback is typically unnecessary. It can only be useful for modules created by means other than the default import mechanism. You can look at the [`_calc___package__()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap.py#L1090) function to see how the current package is calculated exactly. All we should remember is that relative imports break when `__package__` is set to an empty string, as in the case of a top-level module, or to `None`, as in the case of a script, and have a chance of succeeding otherwise. The following function esures this:
+To resolve a relative module name, `__import__()` needs to know the current package of the module from which the import statement was executed. So it looks up `__package__` in `globals`. If `__package__` is `None`, `__import__()` tries to deduce the current package from `__name__`. Since Python always sets `__package__` correctly, this fallback is typically unnecessary. It can only be useful for modules created by means other than the default import mechanism. You can look at the [`_calc___package__()`](https://github.com/python/cpython/blob/57c6cb5100d19a0e0218c77d887c3c239c9ce435/Lib/importlib/_bootstrap.py#L1090) function to see how the current package is calculated exactly. All we should remember is that relative imports break when `__package__` is set to an empty string, as in the case of a top-level module, or to `None`, as in the case of a script, and have a chance of succeeding otherwise. The following function ensures this:
 
 ```python
-# Lib/importlib/_bootstrap.py
-
 def _sanity_check(name, package, level):
     """Verify arguments are "sane"."""
     if not isinstance(name, str):
@@ -625,11 +628,9 @@ def _sanity_check(name, package, level):
         raise ValueError('Empty module name')
 ```
 
-Finally, after the check, the relative name gets resolved:
+After the check, the relative name gets resolved:
 
 ```python
-# Lib/importlib/_bootstrap.py
-
 def _resolve_name(name, package, level):
     """Resolve a relative module name to an absolute one."""
     # strip last `level - 1` portions of `package`
@@ -661,25 +662,23 @@ If the module is not in `sys.modules`, `_find_and_load() `  proceeds with the im
 
 ### Finders and loaders
 
-The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as a module's location. The job of a **loader** is to load the module, that is, to create a module object for the module and execute the module. The same object can function both as a finder and as a loader. Such an object is called an **importer**.
+The job of a **finder** is to make sure that the module exists, determine which loader should be used for loading the module and provide the information needed for loading, such as a module's location. The job of a **loader** is to create a module object for the module and execute the module. The same object can function both as a finder and as a loader. Such an object is called an **importer**.
 
 Finders implement the `find_spec()` method that takes a module name and a module search path and returns a module spec. A **module spec** is an object that encapsulates the loader and all the information needed for loading. This includes module's special attributes. They are simply copied from the spec after the module object is created. For example, `__path__` is copied from `spec.submodule_search_locations`, and `__package__` is copied from `spec.parent`. See [the docs](https://docs.python.org/3/library/importlib.html#importlib.machinery.ModuleSpec) for the full list of spec attributes.
 
-To find a spec, `_find_and_load()` iterates over the finders listed in `sys.meta_path` and calls `find_spec()` on each one until the spec is found. If the spec is not found, it raises `ModuleNotFoundError`.
+To find a spec, `_find_and_load()` iterates over the finders listed in `sys.meta_path` and calls `find_spec()` on each one until the spec is found. If the spec is not found, `_find_and_load()` raises `ModuleNotFoundError`.
 
 By default, `sys.meta_path` stores three finders:
 
 1. `BuiltinImporter` that searches for built-in modules
 2. `FrozenImporter` that searches for frozen modules; and
-3. `PathFinder` that seaches for different kinds of modules including Python files, directories and C extensions.
+3. `PathFinder` that searches for different kinds of modules including Python files, directories and C extensions.
 
 These are called **meta path finders**. Python differentiates them from **path entry finders** that are a part of `PathFinder`. We'll discuss both types of finders in the next sections.
 
 After the spec is found, `_find_and_load()` takes the loader from the spec and passes the spec to the loader's `create_module()` method to create a module object.  If `create_module()` is not implemented or returns `None`, then `_find_and_load()` creates the new module object itself. If the module object does not define some special attributes, which is usually the case, the attributes are copied from the spec. Here's how this logic is implemented in the code:
 
 ```python
-# Lib/importlib/_bootstrap.py
-
 def module_from_spec(spec):
     """Create a module based on the provided spec."""
     # Typically loaders will not implement create_module().
@@ -701,13 +700,11 @@ def module_from_spec(spec):
     return module
 ```
 
-After creating the module object, `_find_and_load()`  executes the module by calling the loader's `exec_module()` method. What this method does depends on the loader, but typically it populates the module's dictionary with functions, classes, constants and other things that the module defines. The loader for Python files, for example, executes the contents of the file when `exec_module()` is called.
+After creating the module object, `_find_and_load()`  executes the module by calling the loader's `exec_module()` method. What this method does depends on the loader, but typically it populates the module's dictionary with functions, classes, constants and other things that the module defines. The loader of Python files, for example, executes the contents of the file when `exec_module()` is called.
 
 The full loading process is implemented as follows:
 
 ```python
-# Lib/importlib/_bootstrap.py
-
 def _load_unlocked(spec):
     # ... compatibility stuff
 
@@ -854,7 +851,7 @@ By default, `sys.path_hooks` contains two path hooks:
 1. a hook that returns `zipimporter` instances; and
 2. a hook that returns `FileFinder` instances.
 
-A `zipimporter` instance searches for modules in a ZIP archive or in the directory inside a ZIP archive. It supports the same kinds of modules as `FileFinder` except for C extensions. You can read more about `zipimporter` in [the docs](https://docs.python.org/3/reference/simple_stmts.html#import) and in [PEP 273](https://www.python.org/dev/peps/pep-0273/). A `FileFinder` instance searches for modules in a directory. We'll discuss it in the next section.
+A `zipimporter` instance searches for modules in a ZIP archive or in a directory inside a ZIP archive. It supports the same kinds of modules as `FileFinder` except for C extensions. You can read more about `zipimporter` in [the docs](https://docs.python.org/3/reference/simple_stmts.html#import) and in [PEP 273](https://www.python.org/dev/peps/pep-0273/). A `FileFinder` instance searches for modules in a directory. We'll discuss it in the next section.
 
 Besides calling path entry finders, `PathFinder` creates specs for namespace packages. When a path entry finder returns a spec that doesn't specify a loader, this means that the spec describes a portion of a namespace package (typically just a directory). In this case, `PathFinder` remembers the `submodule_search_locations` attribute of this spec and continues with the next path entry hoping that it will find a Python file, a regular package or a C extension. If it doesn't find any of these eventually, it creates a new spec for a namespace package whose `submodule_search_locations` contains all the memorized portions.
 
@@ -867,7 +864,7 @@ To sum up what we said about `PathFinder`, here's the complete algorithm that it
     2. If the entry is not in `sys.path_importer_cache`, call hooks listed in `sys.path_hooks` until some hook returns a path entry finder.
     3. Store the path entry finder in `sys.path_importer_cache`. If no path entry finder is found, store `None` and continue with the next entry.
     4. Call `find_spec()` of the path entry finder. If the spec is `None`, continue with the next entry.
-    5. If found a namepsace package (`spec.loader` is `None`), extend `namespace_path` with `spec.submodule_search_locations` and continue with the next entry.
+    5. If found a namespace package (`spec.loader` is `None`), extend `namespace_path` with `spec.submodule_search_locations` and continue with the next entry.
     6. Otherwise, return the spec.
 4. If `namespace_path` is empty, return `None`.
 5. Create a new namespace package spec with `submodule_search_locations` based on `namespace_path`.
@@ -879,7 +876,7 @@ All this complicated logic of `PathFinder` is unnecessary most of the time. Typi
 
 A `FileFinder` instance searches for modules in the directory specified by the path entry. A path entry can either be an absolute path or a relative path. In the latter case, it's resolved with respect to the current working directory.
 
-The `find_spec()` method of `FileFinder` takes an absolute module name but needs only the portion after the last dot since the package portion was already used to determine the directory to search in. So it extracts this portion:
+The `find_spec()` method of `FileFinder` takes an absolute module name but needs only the "tail" portion after the last dot since the package portion was already used to determine the directory to search in. It extracts the "tail" like this:
 
 ```python
 modname_tail = modname.rpartition('.')[2]
@@ -900,7 +897,7 @@ The algorithm that [`find_spec()`](https://github.com/python/cpython/blob/57c6cb
 3. Look for a file named `{modname_tail}.{any_shared_library_extension}` If found, create and return a file spec.
 4. Repeat steps 2 and 3 for `.py` files and for `.pyc` files.
 5. If found a directory named `{modname_tail}` that is not a regular package, create and return a namespace package spec.
-6. Otherswise, return `None`.
+6. Otherwise, return `None`.
 
 A regular package spec is created like this:
 
@@ -925,7 +922,7 @@ spec = ModuleSpec(modname, loader=None, origin=None)
 spec.submodule_search_locations = [path_to_package]
 ```
 
-Once the spec is created, the loading of the module begins. `ExtensionFileLoader` is worth studying, but we should leave it for another post on C extensions. `SourcelessFileLoader` is not very interesting, so we won't discuss it either. `SourceFileLoader` is the most relevant for us because it loads `.py` files. We'll mention how it works.
+Once the spec is created, the loading of the module begins. `ExtensionFileLoader` is worth studying, but we should leave it for another post on C extensions. `SourcelessFileLoader` is not very interesting, so we won't discuss it either. `SourceFileLoader` is the most relevant for us because it loads `.py` files. We'll briefly mention how it works.
 
 ## SourceFileLoader
 
@@ -949,7 +946,7 @@ That's it! We completed our study of finders and loaders and saw what happens du
 
 ## Summary of the import process
 
-Any import statement compiles to a series of bytecode instructions, one of which, called `IMPORT_NAME`, imports the module by calling the built-in `__import__()` function. If the module was specified with a relative name, `__import__()` first resolves the relative name to an absolute one using the `__package__` attribute of the current module. Then it looks up the module in `sys.modules` and returns the module if it's there. If the module is not there, `__import__()` tries to find the module's spec. It calls the `find_spec()` method of every finder listed in `sys.meta_path` until some finder returns the spec. If the module is a built-in module, `BuiltinImporter` returns the spec. If the module is a frozen module, `FrozenImporter` returns the spec. Otherwise, `PathFinder` searches for the module on the module search path, which is either the `__path__` attribute of the parent module or `sys.path` if the former is undefined. `PathFinder`  iterates over the path entries and, for each entry, calls the `find_spec()` method of a corresponding path entry finder. To get the corresponding path entry finder, `PathFinder` passes the path entry to callables listed in `sys.path_hooks`. If the path entry is a path to a directory, one of the callables returns a `FileFinder` instance that seaches for modules in that directory. `PathFinder` calls its `find_spec()`. The `find_spec()` method of `FileFinder`  checks if the directory specified by the path entry contains a C extension, a `.py` file, a `.pyc` file or a directory named after the module. If it finds anything, it create a module spec with the corresponding loader. When `__import__()` gets the spec, it calls the loader's `create_module()` method to create a module object and then the `exec_module()` method to execute the module. Finally, it puts the module in `sys.modules` and returns the module.
+Any import statement compiles to a series of bytecode instructions, one of which, called `IMPORT_NAME`, imports the module by calling the built-in `__import__()` function. If the module was specified with a relative name, `__import__()` first resolves the relative name to an absolute one using the `__package__` attribute of the current module. Then it looks up the module in `sys.modules` and returns the module if it's there. If the module is not there, `__import__()` tries to find the module's spec. It calls the `find_spec()` method of every finder listed in `sys.meta_path` until some finder returns the spec. If the module is a built-in module, `BuiltinImporter` returns the spec. If the module is a frozen module, `FrozenImporter` returns the spec. Otherwise, `PathFinder` searches for the module on the module search path, which is either the `__path__` attribute of the parent module or `sys.path` if the former is undefined. `PathFinder`  iterates over the path entries and, for each entry, calls the `find_spec()` method of the corresponding path entry finder. To get the corresponding path entry finder, `PathFinder` passes the path entry to callables listed in `sys.path_hooks`. If the path entry is a path to a directory, one of the callables returns a `FileFinder` instance that searches for modules in that directory. `PathFinder` calls its `find_spec()`. The `find_spec()` method of `FileFinder`  checks if the directory specified by the path entry contains a C extension, a `.py` file, a `.pyc` file or a directory whose name matches the module name. If it finds anything, it create a module spec with the corresponding loader. When `__import__()` gets the spec, it calls the loader's `create_module()` method to create a module object and then the `exec_module()` method to execute the module. Finally, it puts the module in `sys.modules` and returns the module.
 
 Do you have any questions left? I have one.
 
@@ -964,13 +961,13 @@ By default, `sys.path` includes the following:
 5. A directory that contains standard C extensions, e.g.  `/usr/local/lib/python3.9/lib-dynload`.
 6. Site-specific directories added by the [`site`](https://docs.python.org/3/library/site.html) module, e.g. `/usr/local/lib/python3.9/site-packages`. That's where third-party modules installed by tools like `pip` go.
 
-To construct these paths, Python first determines the location of the `python` executable. If we run the executable by specifying the path, Python already knows the location. Otherwise, it searches for the executable in `PATH`. Eventually, it gets something like `/usr/local/bin/python3`. Then it tries to find out where the standard modules are located. It moves one directory up from the executable until it finds the `lib/python{X.Y}/os.py` file. This file denotes the directory containing standard modules written in Python. The same process is repeated to find the directory containing standard C extensions, but the `lib/python{X.Y}/lib-dynload/` directory is used as a marker this time. A `pyvenv.cfg` file alongside the executable or one directory up may specify another directory to start the search from. And the [`PYTHONHOME`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHOME) environment variable can be used to specify the "base" directory so that Python doesn't need to perform the search at all.
+To construct these paths, Python first determines the location of the `python` executable. If we run the executable by specifying a path, Python already knows the location. Otherwise, it searches for the executable in `PATH`. Eventually, it gets something like `/usr/local/bin/python3`. Then it tries to find out where the standard modules are located. It moves one directory up from the executable until it finds the `lib/python{X.Y}/os.py` file. This file denotes the directory containing standard modules written in Python. The same process is repeated to find the directory containing standard C extensions, but the `lib/python{X.Y}/lib-dynload/` directory is used as a marker this time. A `pyvenv.cfg` file alongside the executable or one directory up may specify another directory to start the search from. And the [`PYTHONHOME`](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHOME) environment variable can be used to specify the "base" directory so that Python doesn't need to perform the search at all.
 
 The `site` standard module takes the "base" directory found during the search or specified by `PYTHONHOME` and prepends `lib/python{X.Y}/site-packages` to it to get the directory containing third-party modules. This directory may contain `.pth` path configuration files that tell `site` to add more site-specific directories to `sys.path`. The added directories may contain `.pth` files as well so that the process repeats recursively.
 
-If the `pyvenv.cfg` file exists, `site` uses the directory containing this file as the "base" directory. Note that this is not the directory that `pyvenv.cfg` specifies. By this mechanism, Python supports virtual environments that have their own site-specific directories but share the standard library with the system-wide installation. Check out [the docs on `site`](https://docs.python.org/3/library/site.html)  and [PEP 405 -- Python Virtual Environments](https://www.python.org/dev/peps/pep-0405/) to learn more.
+If the `pyvenv.cfg` file exists, `site` uses the directory containing this file as the "base" directory. Note that this is not the directory that `pyvenv.cfg` specifies. By this mechanism, Python supports virtual environments that have their own site-specific directories but share the standard library with the system-wide installation. Check out [the docs on `site`](https://docs.python.org/3/library/site.html)  and [PEP 405 -- Python Virtual Environments](https://www.python.org/dev/peps/pep-0405/) to learn more about this.
 
-The process of calculating `sys.path` is even more nuanced than I described. If you want to know those nuances, see [this StackOverflow answer](https://stackoverflow.com/questions/897792/where-is-pythons-sys-path-initialized-from/38403654#38403654).
+The process of calculating `sys.path` is actually even more nuanced. If you want to know those nuances, see [this StackOverflow answer](https://stackoverflow.com/questions/897792/where-is-pythons-sys-path-initialized-from/38403654#38403654).
 
 ## Conclusion
 
@@ -988,4 +985,8 @@ Meta path finders, path entry finders, path hooks, path entries and loaders make
 
 What's about `sys.path`? It's crucial to understand what's there when you import a module, yet I couldn't find a satisfactory explanation in the docs. Perhaps, it's too complicated to describe precisely. But I think that the approximation like the one we gave in the previous section is good enough for practical purposes.
 
-Overall, studying the import system was usefull but not that fun. I think we should study something more exciting next time. How about async/await?
+Overall, studying the import system was useful, but I think that the next time we should study something more exciting. How about async/await?
+
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
