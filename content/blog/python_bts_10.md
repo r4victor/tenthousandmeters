@@ -517,7 +517,7 @@ The implementation of sets can be found in [`Objects/setobject.c`](https://githu
 
 It's not that hard to implement your own hash table once you've seen how others do it. Still, it is hard to choose a hash table design that fits your use case best. CPython implements hash tables that are optimized both for general and internal use. The result is a unique and clever design. But it is also controversial. For example, the probing scheme is designed to tolerate bad hash functions, and this may come at the expense of cache-friendliness. Of course, it's all talk, and only benchmarks can tell the truth. But we cannot just take some state-of-the-art hash table for C++ and compare it with a Python dictionary because Python objects introduce overhead. A proper benchmark would implement Python dictionaries with different hash table designs. It's a lot of work, though, and I don't know of anyone who did it. So, do you have any plans for the next weekend?
 
-The `dict` type is a part of the `builtins` module, so we can always access it. Things that are not in `builtins` have to be imported before they can be used. And that's why we need the Python import system. Next time we'll see how it works.
+The `dict` type is a part of the `builtins` module, so we can always access it. Things that are not in `builtins` have to be imported before they can be used. And that's why we need the Python import system. [Next time]({filename}/blog/python_bts_11.md) we'll see how it works.
 
 <br>
 

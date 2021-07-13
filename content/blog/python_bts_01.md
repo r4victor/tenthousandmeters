@@ -246,7 +246,7 @@ CPython has three more:
 
 #### thread state
 
-A thread state is a data structure that contains thread-specific data including the call stack, the exception state and the debugging settings. It should not be confused with an OS thread. They're closely connected, though. Consider what happens when you use the standard [`treading`](https://docs.python.org/3/library/threading.html) module to run a function in a separate thread:
+A thread state is a data structure that contains thread-specific data including the call stack, the exception state and the debugging settings. It should not be confused with an OS thread. They're closely connected, though. Consider what happens when you use the standard [`threading`](https://docs.python.org/3/library/threading.html) module to run a function in a separate thread:
 
 ```python
 from threading import Thread
