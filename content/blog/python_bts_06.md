@@ -32,7 +32,7 @@ To compute the function `f`, CPython must evaluate the expression `x + 7`. The q
 1. It calls `x.__add__(7)` or `type(x).__add__(x, 7)`.
 2. If `x` doesn't have `__add__()`, or if this method fails, it calls `(7).__radd__(x)` or `int.__radd__(7, x)`.
 
-The reality, tough, is a bit more complicated. What really happens depends on what `x` is. For example, if `x` is an instance of a user-defined class, the algorithm described above resembles the truth. If, however, `x` is an instance of a built-in type, like `int` or `float`, CPython doesn't call any special methods at all.
+The reality, though, is a bit more complicated. What really happens depends on what `x` is. For example, if `x` is an instance of a user-defined class, the algorithm described above resembles the truth. If, however, `x` is an instance of a built-in type, like `int` or `float`, CPython doesn't call any special methods at all.
 
 To learn how some Python code is executed, we can do the following:
 
@@ -835,7 +835,7 @@ TypeError: unsupported operand type(s) for +: 'A' and 'int'
 >>> 
 ```
 
-How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so, when we set an attribute on a class, this function gets called. To set an attribute, it stores the value of the attribute in the class's dictionary. After this, it checks if the attribute is a special method. If it is a special method, the corresponding slots are set. The same `update_one_slot()` function is called to do that.
+How does that work? To set an attribute on an object, the VM calls the `tp_setattro` slot of the object's type. The `tp_setattro` slot of `type` points to the `type_setattro()` function, so when we set an attribute on a class, this function gets called. It stores the value of the attribute in the class's dictionary. Then it checks if the attribute is a special method and, if so, sets the corresponding slots by calling the `update_one_slot()` function.
 
 Before we can learn how CPython does the reverse, that is, how it adds special methods to built-in types, we need to understand what a method is. 
 
