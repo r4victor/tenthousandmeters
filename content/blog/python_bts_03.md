@@ -78,7 +78,7 @@ $ make -j -s
 
 At this point, we can proudly say that we've built our own copy of CPython:
 
-```text
+```pycon
 $ ./python.exe
 Python 3.9.0+ (heads/3.9-dirty:20bdeedfb4, Oct 10 2020, 16:55:24)
 [Clang 10.0.0 (clang-1000.10.44.4)] on darwin
