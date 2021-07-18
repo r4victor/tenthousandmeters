@@ -761,13 +761,13 @@ $ python -q
 >>> 
 ```
 
-The catch is that the module `a` is only partially initialized when the module `b` is executed. So if we use `X` in `b`: 
+The catch is that the module `a` is only partially initialized when the module `b` is executed. So if we use `a.X` in `b`: 
 
 ```python
 # b.py
 import a
 
-print(X)
+print(a.X)
 ```
 
 we get an error:
@@ -780,8 +780,8 @@ Traceback (most recent call last):
   File "/a.py", line 1, in <module>
     import b
   File "/b.py", line 3, in <module>
-    print(X)
-NameError: name 'X' is not defined
+    print(a.X)
+AttributeError: partially initialized module 'a' has no attribute 'X' (most likely due to a circular import)
 ```
 
 Second, a module is removed from `sys.modules` if the execution fails for any reason, but modules that were successfully imported as a side-effect remain in `sys.modules`.
