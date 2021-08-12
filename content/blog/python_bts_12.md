@@ -228,3 +228,89 @@ The thread pool approach is both simple and practical. Note, however, that you s
 
 ## I/O multiplexing
 
+Think about the sequential server again. Such a server always waits for some specific event to happen. When it has no connected clients, it waits for a new client to connect. When it has a connected client, it waits for this client to send some data. To work concurrently, however, the server should instead be able to handle any event that happens next. If the current client doesn't send anything, but a new client connects, the server should accept the new connection. Then it should maintain multiple active connections and reply to the client that sends data next.
+
+But how can we know what event the server should handle next? By default, socket methods such as `accept()`, `recv()` and `sendall()` are all blocking. So if we decide to call `accept()`, the program will block until a new client connects, and we won't be able to call `recv()` on client sockets in the meantime. We could solve this problem by setting a timeout on the blocking socket methods with `sock.settimeout(timeout)` or by turning a socket into a non-blocking mode with `sock.setblocking(False)`. We could then maintain a set of active sockets and, for each socket, call the correspoding socket method in an infinite loop. So, we would call `accept()` on the socket that listens for new connections and `recv()` on the sockets that wait for clients to send data.
+
+The problem with the described approach is that it's not clear how to do the polling right. If we make all the sockets non-blocking or set timeouts too short, then the server will be making calls all the time and consume a lot of CPU. Conversely, if we set timeouts too long, the server will be slow to reply.
+
+The better approach is to ask the OS which sockets are ready for reading and writing. Clearly, the OS has this information. When a new packet arrives on a network interface, the OS gets notified, decodes the packet, determines the socket to which the packet belongs and wakes up the processes that do blocking `recv()` on that socket. But a process doesn't need to call `recv()` to get notified. It can use an **I/O multiplexing** mechanism such as [`select()`](https://man7.org/linux/man-pages/man2/select.2.html), [`poll()`](https://man7.org/linux/man-pages/man2/poll.2.html) or [`epoll()`](https://man7.org/linux/man-pages/man7/epoll.7.html) to tell the OS that it's interested in reading from or writing to some socket. When the socket becomes ready, the OS will wake up such a process as well.
+
+The Python standard [`selectors`](https://docs.python.org/3/library/selectors.html) module wraps different I/O multiplexing mechanisms available on the system and provides the same high-level API to each of them. For example, it wraps `select()` with `SelectSelector` and `epoll()` with `EpollSelector`. It provides the most efficient mechanism available on the system as `DefaultSelector`. Here's how you are supposed to use it. You first create a selector object:
+
+```python
+sel = selectors.DefaultSelector()
+```
+
+Then you register a socket that you want to monitor. You pass the socket, the types of events (read or write) and any auxiliary data to the selector's `register()` method:
+
+```python
+sel.register(sock, selectors.EVENT_READ, my_data)
+```
+
+Finally, you call the selector's `select()` method:
+
+```python
+events = sel.select()
+```
+
+This call returns a list of `(key, events)` tuples. Each tuple describes a ready socket:
+
+* `key` is an object that stores the socket (`key.fileobj`) and the auxiliary data associated with the socket (`key.data`).
+* `events` is a bitmask of events ready on the socket (`selectors.EVENT_READ` or `selectors.EVENT_WRITE` or both).
+
+If there are ready sockets when you call `select()`, then `select()` returns immideatly. Otherwise, it blocks until some of the registered sockets become ready. The OS will notify `select()` as it notifies blocking socket methods like `recv()`.
+
+What should we do with a ready socket? We certainly had some idea of what do to with the socket when we registered it, so let's register every socket with a callback that should be called when the socket becomes ready. After all, that's what the auxially data parameter of the selector's `register()` method is for.
+
+Now we're ready to implement a single-threaded concurrent server using I/O multiplexing:
+
+```python
+# echo_io_multiplexing.py
+
+import socket
+import selectors
+
+
+sel = selectors.DefaultSelector()
+
+
+def setup_listening_socket(host='127.0.0.1', port=55555):
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen()
+    sel.register(sock, selectors.EVENT_READ, accept)
+
+
+def accept(sock):
+    client_sock, addr = sock.accept()
+    print('Connection from', addr)
+    sel.register(client_sock, selectors.EVENT_READ, recv_and_send)
+
+
+def recv_and_send(sock):
+    recieved_data = sock.recv(4096)
+    if recieved_data:
+        # assume sendall won't block
+        sock.sendall(recieved_data)
+    else:
+        print('Client disconnected:', sock.getpeername())
+        sel.unregister(sock)
+        sock.close()
+
+
+def run_event_loop():
+    while True:
+        for key, _ in sel.select():
+            callback = key.data
+            sock = key.fileobj
+            callback(sock)
+
+
+if __name__ == '__main__':
+    setup_listening_socket()
+    run_event_loop()
+```
+
+Here we first register an `accept()` callback on the listening socket. This callback in turn accepts clients and registers a `recv_and_send()` callback on every client socket. The core of the program is the **event loop** – an infinite loop that, on every iteration, selects ready sockets and calls the corresponding callbacks.
