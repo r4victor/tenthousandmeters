@@ -251,7 +251,7 @@ sel.register(sock, selectors.EVENT_READ, my_data)
 Finally, you call the selector's `select()` method:
 
 ```python
-events = sel.select()
+keys_events = sel.select()
 ```
 
 This call returns a list of `(key, events)` tuples. Each tuple describes a ready socket:
@@ -313,4 +313,11 @@ if __name__ == '__main__':
     run_event_loop()
 ```
 
-Here we first register an `accept()` callback on the listening socket. This callback in turn accepts clients and registers a `recv_and_send()` callback on every client socket. The core of the program is the **event loop** – an infinite loop that, on every iteration, selects ready sockets and calls the corresponding callbacks.
+Here we first register an `accept()` callback on the listening socket. This callback accepts new clients and registers a `recv_and_send()` callback on every client socket. The core of the program is the **event loop** – an infinite loop that, on every iteration, selects ready sockets and calls the corresponding callbacks.
+
+The event loop solution works fine. Its main disadvantage compared to the multi-threaded solutions is that you have to structure the code in a weird, callback-centered way. The code in our example doesn't look so bad, but this is in part because we do not handle all the things properly. For example, writing to a socket may block if the write queue is full, so we should also check whether the socket is ready for writing before calling `sendall()`. This means that the `recv_and_send()` function must be decomposed into two functions. The problem would be even more apparent if we were to implement something beyond the  primitive "echo" protocol.
+
+OS threads do not impose a callback style programming on us, yet they provide concurrency. How is that possible? The key here is the ability of the OS to suspend and resume thread execution. If we'd have functions that can be suspended and resumed like OS threads, we could write concurrent single-threaded code. And you know what? Pyhon allows us to write such functions. 
+
+## Generators and coroutines
+
