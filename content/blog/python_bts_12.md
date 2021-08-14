@@ -317,7 +317,303 @@ Here we first register an `accept()` callback on the listening socket. This call
 
 The event loop solution works fine. Its main disadvantage compared to the multi-threaded solutions is that you have to structure the code in a weird, callback-centered way. The code in our example doesn't look so bad, but this is in part because we do not handle all the things properly. For example, writing to a socket may block if the write queue is full, so we should also check whether the socket is ready for writing before calling `sendall()`. This means that the `recv_and_send()` function must be decomposed into two functions. The problem would be even more apparent if we were to implement something beyond the  primitive "echo" protocol.
 
-OS threads do not impose a callback style programming on us, yet they provide concurrency. How is that possible? The key here is the ability of the OS to suspend and resume thread execution. If we'd have functions that can be suspended and resumed like OS threads, we could write concurrent single-threaded code. And you know what? Pyhon allows us to write such functions. 
+OS threads do not impose callback style programming on us, yet they provide concurrency. How is that possible? The key here is the ability of the OS to suspend and resume thread execution. If we'd have functions that can be suspended and resumed like OS threads, we could write concurrent single-threaded code. And you know what? Pyhon allows us to write such functions. 
 
-## Generators and coroutines
+## Generator functions and generators
+
+A **generator function** is a function that has one or more [`yield`](https://docs.python.org/3/reference/expressions.html#yield-expressions) expressions in its body, like this one:
+
+```pycon
+$ python -q
+>>> def gen():
+...     yield 1
+...     yield 2
+...     return 3
+... 
+>>> 
+```
+
+When you call a generator function, Python doesn't run the function's code as it does for ordinary functions but returns a **generator**:
+
+```pycon
+>>> g = gen()
+>>> g
+<generator object gen at 0x105655660>
+```
+
+To actually run the code, you pass the generator to the built-in [`next()`](https://docs.python.org/3/library/functions.html#next) function. It runs the generator to the first `yield` expression, at which point it suspends the execution and returns the argument of `yield`. Calling `next()` second time resumes the generator from the point where it was suspended and runs it to the next `yield`:
+
+```pycon
+>>> next(g)
+1
+>>> next(g)
+2
+```
+
+When no more `yield` expressions are left, calling `next()` raises the `StopIteration` exception:
+
+```pycon
+>>> next(g)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+StopIteration: 3
+```
+
+If the generator returns something, the exception will hold the returned value:
+
+```pycon
+>>> g = gen()
+>>> next(g)
+1
+>>> next(g)
+2
+>>> try:
+...     next(g)
+... except StopIteration as e:
+...     e.value
+... 
+3
+```
+
+
+
+Initially generators were introduced to Python as an alternative way to write iterators. Instead of defining a class with the [`__iter__()`](https://docs.python.org/3/reference/datamodel.html#object.__iter__) and [`__next__()`](https://docs.python.org/3/library/stdtypes.html#iterator.__next__) special methods, you can now use the `yield` keyword to write a function that generates values. Python fills the special methods for you, so the function becomes the iterator automatically. You can get the generatated values by calling `next()` but you typically iterate over them in a `for` loop:
+
+```pycon
+>>> for i in gen():
+...     i
+... 
+1
+2
+```
+
+Generators produce values in a lazy, on-demand manner, so they are memory-efficient and can even be used to generate infinite sequences. [PEP 255](https://www.python.org/dev/peps/pep-0255/) describes this use case of generators in great detail. We, however, want to use generators for a completely different reason. What's important for us is not the values that a generator produces but the mere fact that it can be suspended and resumed.
+
+## Generators as a means to concurrency
+
+Take any program that performs multiple tasks. Turn functions that represent these tasks into generators by inserting few `yield` statements here and there. Then run the generators in a round-robin fashion: call `next()` on every generator in some fixed order and repeat this step until all generators are exhausted. You'll get a concurrent program that runs like this:
+
+picture??
+
+Let's apply this strategy to the sequential server to make it concurrent. First, we insert some `yield` statements. I suggest to insert them before every blocking operation. Then, we need to run generators. I suggest to write a class that maintains a queue of scheduled tasks (generators) and provides the `run()` method that runs the scheduled tasks in a loop in a round-robin fashion. We'll call this class `EventLoopNoIO` since it functions like an event loop except that it doesn't do I/O multiplexing. Here's the server code:
+
+```python
+from collections import deque
+import socket
+
+from event_loop_no_io import EventLoopNoIO
+
+
+loop = EventLoopNoIO()
+
+
+def run_sever(host='127.0.0.1', port=55555):
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen()
+    while True:
+        yield
+        client_sock, addr = sock.accept()
+        print('Connection from', addr)
+        loop.create_task(handle_client(client_sock))
+
+
+def handle_client(sock: socket.socket):
+    while True:
+        yield
+        recieved_data = sock.recv(4096)
+        if not recieved_data:
+            break
+        yield
+        sock.sendall(recieved_data)
+
+    print('Client disconnected:', sock.getpeername())
+    sock.close()
+
+
+if __name__ == '__main__':
+    loop.create_task(run_sever())
+    loop.run()
+```
+
+and here's the event loop code:
+
+```python
+from collections import deque
+
+
+class EventLoopNoIO:
+    def __init__(self):
+        self.tasks_to_run = deque([])
+
+    def create_task(self, coro):
+        self.tasks_to_run.append(coro)
+
+    def run(self):
+        while self.tasks_to_run:
+            task = self.tasks_to_run.popleft()
+            try:
+                next(task)
+            except StopIteration:
+                continue
+            self.create_task(task)
+```
+
+The problem with this solution is that it provides very limited concurrency. The tasks run in an interleaved manner, but their order is fixed. So if the next scheduled task is the task that accepts new connections, tasks that handle connected clients will have to wait until a new client connects.
+
+Another way to phrase this problem is to say that the event loop doesn't check whether socket methods will block, so we can fix it by adding I/O multiplexing. Instead of rescheduling a task immediately after running it, the event loop should reschedule the task only when the socket that the task is waiting on becomes available for reading (or writing). The task can register its intention to read from or write to a socket by calling some event loop method. Alternatively, it can just `yield` this information to the event loop. Here's a version of the server that takes the latter approach:
+
+```python
+from collections import deque
+import socket
+
+from event_loop_io import EventLoopIo
+
+
+loop = EventLoopIo()
+
+
+def run_sever(host='127.0.0.1', port=55555):
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen()
+    while True:
+        yield 'wait_read', sock
+        client_sock, addr = sock.accept()
+        print('Connection from', addr)
+        loop.create_task(handle_client(client_sock))
+
+
+def handle_client(sock: socket.socket):
+    while True:
+        yield 'wait_read', sock
+        recieved_data = sock.recv(4096)
+        if not recieved_data:
+            break
+        yield 'wait_write', sock
+        sock.sendall(recieved_data)
+
+    print('Client disconnected:', sock.getpeername())
+    sock.close()
+
+
+if __name__ == '__main__':
+    loop.create_task(run_sever())
+    loop.run()
+```
+
+And here's the new event loop that does I/O multiplexing:
+
+```python
+from collections import deque
+import selectors
+
+
+class EventLoopIo:
+    def __init__(self):
+        self.tasks_to_run = deque([])
+        self.sel = selectors.DefaultSelector()
+
+    def create_task(self, coro):
+        self.tasks_to_run.append(coro)
+
+    def run(self):
+        while True:
+            if self.tasks_to_run:
+                task = self.tasks_to_run.popleft()
+                try:
+                    op, arg = next(task)
+                except StopIteration:
+                    continue
+
+                if op == 'wait_read':
+                    self.sel.register(arg, selectors.EVENT_READ, task)
+                elif op == 'wait_write':
+                    self.sel.register(arg, selectors.EVENT_WRITE, task)
+                else:
+                    raise ValueError('Unknown event loop operation:', op)
+            else:
+                for key, _ in self.sel.select():
+                    task = key.data
+                    sock = key.fileobj
+                    self.sel.unregister(sock)
+                    self.create_task(task)
+```
+
+What do we get out of it? First, we get the server that works with multiple clients perfectly fine:
+
+```text
+$ python clients.py 
+[00.185755] Client 0 tries to connect.
+        [00.186700] Client 1 tries to connect.
+                [00.186975] Client 2 tries to connect.
+[00.188485] Client 0 connects.
+        [00.188753] Client 1 connects.
+                [00.188820] Client 2 connects.
+[00.691060] Client 0 sends "Hello".
+        [00.691454] Client 1 sends "Hello".
+                [00.691605] Client 2 sends "Hello".
+[00.692412] Client 0 recieves "Hello".
+        [00.692527] Client 1 recieves "Hello".
+                [00.692680] Client 2 recieves "Hello".
+[01.196732] Client 0 sends "world!".
+        [01.196933] Client 1 sends "world!".
+                [01.197188] Client 2 sends "world!".
+[01.197494] Client 0 recieves "world!".
+[01.197624] Client 0 disconnects.
+        [01.197687] Client 1 recieves "world!".
+        [01.197766] Client 1 disconnects.
+                [01.198063] Client 2 recieves "world!".
+                [01.198195] Client 2 disconnects.
+```
+
+Second, we get the code that looks like regular sequential code. Of course, we had to write the event loop, but this is not something you typically do yourself. Event loops come with libraries, and in Python, you're most likely to use an event loop that comes with [`asyncio`](https://docs.python.org/3/library/asyncio.html).
+
+We'll find that using generators in this way has an issue if try to factor out some generator's code into a subgenerator. For example, it would be very handy to move these two lines:
+
+```python
+yield 'wait_read', sock
+recieved_data = sock.recv(4096)
+```
+
+into a separate function:
+
+```python
+def async_recv(sock, bufsize=4096):
+    yield 'wait_read', sock
+    return sock.recv(bufsize)
+```
+
+and then call the function like this:
+
+```python
+recieved_data = async_recv(sock)
+```
+
+But it won't work. The `async_recv()` function returns a generator, not the data, so we have to run the generator by calling `next()`. We also have to reyield yielded values, handle the `StopIteration` exception and extract the result from it. Obviously, the amount of code that we have to write exceeds all the benefits of factoring out the code.
+
+--
+
+[PEP 255](https://www.python.org/dev/peps/pep-0255/) describes this initial use case of generators. [PEP 342](https://www.python.org/dev/peps/pep-0342/) introduced enhanced generators in Python 2.5, which enabled other uses cases as well. Generators got the `send()` method that works like `__next__()` but also sends a value to a generator that becomes the value of the suspended `yield` expression:
+
+```pycon
+>>> def consumer():
+...     val = yield 1
+...     print('Got', val)
+...     val = yield
+...     print('Got', val)
+... 
+>>> c = consumer()
+>>> next(c)
+1
+>>> c.send(2)
+Got 2
+>>> c.send(3)
+Got 3
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+StopIteration
+```
 
