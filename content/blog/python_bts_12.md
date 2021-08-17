@@ -713,7 +713,7 @@ else:
 RESULT = _r
 ```
 
-The code may seem complicated but what it essentially does is make the subgenerator work as if its code were a part of the generator.
+The code may seem complicated but what it essentially does is make the subgenerator work as if its code were a part of the generator. And though I sometimes say that "generator runs the subgenerator", the thing that actually runs the subgenerator is the generator's caller. Look at the generator as an intermediary between the two.
 
 Enough theory. Let's take advantage of `yield from` to make the server's code more concise. First, we factor out every boilerplate `yield` statement and the following socket operation to a separate generator function. We put these functions in the event loop:
 
@@ -843,13 +843,13 @@ Traceback (most recent call last):
 StopIteration: 2
 ```
 
-The `await` keyword runs the awaited coroutine inplace just like `yield from` runs subgenerators. In fact, `await` implemented as `yield from` with some additional checks to ensure that the awaitable object is not a regular generator or some other iterable.
+The `await` keyword "runs" the awaited coroutine inplace just like `yield from` "runs" subgenerators. In fact, `await` implemented as `yield from` with some additional checks to ensure that the object being awaited is not a regular generator or some other iterable.
 
 When you use generators as coroutines, you must end every chain of `yield from` calls with a generator that does `yield`. Similarly, you must end every chain of `await` calls with a `yield` expression. However, if you try to use a `yield` expression in an `async def` function, what you'll get is not a native coroutine but something called an asynchronous generator:
 
 ```pycon
 >>> async def g():
-...     yield 3
+...     yield 2
 ... 
 >>> g()
 <async_generator object g at 0x1046c6790>
@@ -863,14 +863,129 @@ First, we can write a regular generator function and decorate it with `@types.co
 >>> import types
 >>> @types.coroutine
 ... def gen_coro():
-...     yield 4
+...     yield 3
 ... 
 >>> async def coro3():
 ...     await gen_coro()
 ... 
 >>> coro3().send(None)
+3
+```
+
+A generator decorated with `@types.coroutine` is called a **generator-based coroutine**. Why do we need such coroutines? Well, if Python allowed us to `await` on regular generators, we would again mix the concepts of generators and coroutines and come back to the same ambiguity problem. The `@types.coroutine` decorator explicitly says that the generator is a coroutine.
+
+As a second option, we can make any object awaitable by defining the [`__await__()`](https://docs.python.org/3/reference/datamodel.html#object.__await__) special method. When we `await` on some object, `await` first checks whether the object is a native coroutine or a generator-based coroutine, in which case it "runs" the coroutine. Otherwise, it "runs" the iterator returned by object's `__await__()`. This iterator may be a regular generator:
+
+```pycon
+>>> class A:
+...     def __await__(self):
+...             yield 4
+... 
+>>> async def coro4():
+...     await A()
+... 
+>>> coro4().send(None)
 4
 ```
 
-A generator decorated with `@types.coroutine` is called a **generator-based coroutine**. Why do we need such coroutines? Well, if Python allowed us to `await` on regular generators, we would again mix the concepts of generators and coroutines and returned back to the same ambiguity problem. The `@types.coroutine` decorator explicitly says that the generator is a actually a coroutine.
+Let's now write the final version of the server using `async`/`await`. First, we mark the server's functions with `async` and change `yield from` calls to `await` calls:
+
+```python
+# echo_08_async_await.py
+
+import socket
+
+from event_loop_04_async_await import EventLoopAsyncAwait
+
+
+loop = EventLoopAsyncAwait()
+
+
+async def run_sever(host='127.0.0.1', port=55555):
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen()
+    while True:
+        client_sock, addr = await loop.sock_accept(sock)
+        print('Connection from', addr)
+        loop.create_task(handle_client(client_sock))
+
+
+async def handle_client(sock):
+    while True:
+        recieved_data = await loop.sock_recv(sock, 4096)
+        if not recieved_data:
+            break
+        await loop.sock_sendall(sock, recieved_data)
+
+    print('Client disconnected:', sock.getpeername())
+    sock.close()
+
+
+if __name__ == '__main__':
+    loop.create_task(run_sever())
+    loop.run()
+```
+
+Then, we modify the event loop. We decorate generator functions with `@types.coroutine` so that they can be used with `await` and run the tasks by calling `send(None)` instead of `next()`:
+
+```python
+# event_loop_04_async_await.py
+
+from collections import deque
+import selectors
+import types
+
+
+class EventLoopAsyncAwait:
+    def __init__(self):
+        self.tasks_to_run = deque([])
+        self.sel = selectors.DefaultSelector()
+
+    def create_task(self, coro):
+        self.tasks_to_run.append(coro)
+
+    @types.coroutine
+    def sock_recv(self, sock, n):
+        yield 'wait_read', sock
+        return sock.recv(n)
+
+    @types.coroutine
+    def sock_sendall(self, sock, data):
+        yield 'wait_write', sock
+        sock.sendall(data)
+    
+    @types.coroutine
+    def sock_accept(self, sock):
+        yield 'wait_read', sock
+        return sock.accept()
+
+    def run(self):
+        while True:
+            if self.tasks_to_run:
+                task = self.tasks_to_run.popleft()
+                try:
+                    op, arg = task.send(None)
+                except StopIteration:
+                    continue
+
+                if op == 'wait_read':
+                    self.sel.register(arg, selectors.EVENT_READ, task)
+                elif op == 'wait_write':
+                    self.sel.register(arg, selectors.EVENT_WRITE, task)
+                else:
+                    raise ValueError('Unknown event loop operation:', op)
+            else:
+                for key, _ in self.sel.select():
+                    task = key.data
+                    sock = key.fileobj
+                    self.sel.unregister(sock)
+                    self.create_task(task)
+
+```
+
+This version works exactly like the previous one based on `yield from`. Only the syntax is different.
+
+## How generators and coroutines are implemented
 
