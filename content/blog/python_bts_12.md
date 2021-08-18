@@ -880,7 +880,7 @@ First, we can write a regular generator function and decorate it with `@types.co
 
 A generator decorated with `@types.coroutine` is called a **generator-based coroutine**. Why do we need such coroutines? Well, if Python allowed us to `await` on regular generators, we would again mix the concepts of generators and coroutines and come back to the same ambiguity problem. The `@types.coroutine` decorator explicitly says that the generator is a coroutine.
 
-As a second option, we can make any object awaitable by defining the [`__await__()`](https://docs.python.org/3/reference/datamodel.html#object.__await__) special method. When we `await` on some object, `await` first checks whether the object is a native coroutine or a generator-based coroutine, in which case it "yields from" the coroutine. Otherwise, it "yields from" the iterator returned by the object's `__await__()` method. This iterator may be a regular generator:
+As a second option, we can make any object awaitable by defining the [`__await__()`](https://docs.python.org/3/reference/datamodel.html#object.__await__) special method. When we `await` on some object, `await` first checks whether the object is a native coroutine or a generator-based coroutine, in which case it "yields from" the coroutine. Otherwise, it "yields from" the iterator returned by the object's `__await__()` method. Since any generator is an iterator, `__await__()` can be a regular generator function:
 
 ```pycon
 >>> class A:
@@ -996,4 +996,47 @@ And we're done! We've implemented an `async`/`await`-based concurrent server fro
 By now, you should understand what `async`/`await` is all about. But you also should have questions about implementation details of generators, coroutines, `yield`, `yield from` and `await`. We're going to cover that  in the next section.
 
 ## How generators and coroutines are implemented
+
+If you've been following this series, you effectively know how Python implements generators. First recall that [the compiler]({filename}/blog/python_bts_02.md) creates a code object for every code block that it encounters, where a code block can be a module, a function or a class body. A code object describes what the code block does. It contains the block's bytecode, constants, variable names and other relevant information. A function is an object that stores the function's code object and such things as the function's name, default arguments and `__doc__` attribute.
+
+A generator function is an ordinary function whose code object has a `CO_GENERATOR` flag set. When we call a generator function, Python checks for this flag, and if it sees the flag, it returns a generator object instead of executing the function. Similarly, a native coroutine function is an ordinary function whose code object has a `CO_COROUTINE` flag set. Python check for this flag too and returns a native coroutine object if it sees the flag.
+
+To execute a function, Python first creates a frame for it and then executes the frame. A frame is an object that captures the state of the code object execution. It stores the code object itself as well as the values of local variables, references to the dictionaries of global and built-in variables, the value stack, the instruction pointer and so on.
+
+A generator object stores the corresponding frame and some utility data like the generator's name and a flag telling whether the generator is currently running or not. When we call the generator's `send()` or `__next__()` method, Python executes the generator's frame just like it executes the frame of an ordinary function – it iterates over bytecode instructions one by one in the [evaluation loop]({filename}/blog/python_bts_04.md) and does whatever the instructions tell it to do. The only crucial difference is that every time we call a function, Python creates a new frame for it, while a generator keeps the same frame between the runs, thus preserving the state.
+
+The compiler produces a `YIELD_VALUE` instruction when it encounters a `yield` expression. As always, we can use the [`dis`](https://docs.python.org/3/library/dis.html#opcode-RETURN_VALUE) standard module to check this:
+
+```python
+# gen.py
+
+def g():
+    yield 1
+    val = yield 2
+    return 3
+```
+
+```pycon
+$ python -m dis gen.py
+...
+Disassembly of <code object g at 0x10d6a42f0, file "gen.py", line 1>:
+  2           0 LOAD_CONST               1 (1)
+              2 YIELD_VALUE
+              4 POP_TOP
+
+  3           6 LOAD_CONST               2 (2)
+              8 YIELD_VALUE
+             10 STORE_FAST               0 (val)
+
+  4          12 LOAD_CONST               3 (3)
+             14 RETURN_VALUE
+```
+
+`YIELD_VALUE` tells Python to stop executing the frame and return the value on top of the value stack. It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the value stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, generator's `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
+
+Before executing the frame, `send()` pushes the passed argument onto the value stack. The argument is then assigned to a variable with `STORE_FAST` or just popped with `POP_TOP` if `yield` does not receive values.  If you cound't remember before whether generators first yield or recieve, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
+
+A native coroutine is basically a generator object that has a different type. The difference between the types is that the `generator` type implements `__iter__()` and `__next__()`, while the `coroutine` type implements `__await__()`. The implementation of `send()` is the same.
+
+A `YIELD_FROM` instruction produced for a `yield from` expression
 
