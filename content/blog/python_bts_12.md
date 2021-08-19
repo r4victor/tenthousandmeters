@@ -1008,7 +1008,7 @@ A generator object stores the corresponding frame and some utility data like the
 The compiler produces a `YIELD_VALUE` instruction when it encounters a `yield` expression. As always, we can use the [`dis`](https://docs.python.org/3/library/dis.html#opcode-RETURN_VALUE) standard module to check this:
 
 ```python
-# gen.py
+# yield.py
 
 def g():
     yield 1
@@ -1017,26 +1017,100 @@ def g():
 ```
 
 ```pycon
-$ python -m dis gen.py
+$ python -m dis yield.py
 ...
-Disassembly of <code object g at 0x10d6a42f0, file "gen.py", line 1>:
-  2           0 LOAD_CONST               1 (1)
+Disassembly of <code object g at 0x105b1c710, file "yield.py", line 3>:
+  4           0 LOAD_CONST               1 (1)
               2 YIELD_VALUE
               4 POP_TOP
 
-  3           6 LOAD_CONST               2 (2)
+  5           6 LOAD_CONST               2 (2)
               8 YIELD_VALUE
              10 STORE_FAST               0 (val)
 
-  4          12 LOAD_CONST               3 (3)
+  6          12 LOAD_CONST               3 (3)
              14 RETURN_VALUE
 ```
 
-`YIELD_VALUE` tells Python to stop executing the frame and return the value on top of the value stack. It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the value stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, generator's `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
+`YIELD_VALUE` tells Python to stop executing the frame and return the value on top of the stack. It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, generator's `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
 
-Before executing the frame, `send()` pushes the passed argument onto the value stack. The argument is then assigned to a variable with `STORE_FAST` or just popped with `POP_TOP` if `yield` does not receive values.  If you cound't remember before whether generators first yield or recieve, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
+When `send()` executes a frame for the first time, it doesn't actually sends the passed argument to the generator. But it ensures that the argument is `None` so that a meaningful value is never ignored:
+
+```pycon
+>>> def g():
+...     val = yield
+... 
+>>> g().send(42)
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+TypeError: can't send non-None value to a just-started generator
+```
+
+On subsequent runs,  `send()` pushes the argument onto the stack. The argument is then assigned to a variable by `STORE_FAST` (or similar instruction) or just popped by `POP_TOP` if `yield` does not receive a value. If you cound't remember before whether generators first yield or recieve, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
+
+The compiler produces `GET_YIELD_FROM_ITER`, `LOAD_CONST` and `YIELD_FROM` instructions when it encounters a `yield from` expression:
+
+```python
+# yield_from.py
+
+def g():
+    res = yield from another_gen
+```
+
+```text
+$ python -m dis yield_from.py
+...
+Disassembly of <code object g at 0x1051117c0, file "yield_from.py", line 3>:
+  4           0 LOAD_GLOBAL              0 (another_gen)
+              2 GET_YIELD_FROM_ITER
+              4 LOAD_CONST               0 (None)
+              6 YIELD_FROM
+              8 STORE_FAST               0 (res)
+...
+```
+
+The job of `GET_YIELD_FROM_ITER` is to ensure that the object to yield from, which is the value on top of the stack, is an iterator. If the object is a generator, `GET_YIELD_FROM_ITER` leaves it as is. Otherwise, it replaces the object with `iter(obj)`.
+
+The first thing `YIELD_FROM` does is pop a value from the stack. Usually, this value is the value sended into the generator by `send()`. But on the first run, `send()` doesn't send the value, so the compiler produces a `LOAD_CONST` instruction before `YIELD_FROM` that pushes `None` onto the stack.
+
+The second thing `YIELD_FROM` does is peek the object to yield from. If the value to send is `None`, `YIELD_FROM` calls `obj.__next__()`. Otherwise, it calls `obj.send(value)`. If the call raises a `StopIteration` exception, then `YIELD_FROM` replaces the object on top of the stack with the result and continues with the frame execution. If the call returns a value without exceptions, `YIELD_FROM` stops the frame execution and returns the value to `send()`. In the latter case, it also sets the instruction pointer in such a way so that the next execution of the frame starts with `YIELD_FROM` again. What will be different on subsequent runs is the state of the object to yield from and the value to send.
 
 A native coroutine is basically a generator object that has a different type. The difference between the types is that the `generator` type implements `__iter__()` and `__next__()`, while the `coroutine` type implements `__await__()`. The implementation of `send()` is the same.
 
-A `YIELD_FROM` instruction produced for a `yield from` expression
+The compiler produces the same bytecode instructions for an `await` expression as for `yield from` except that instead of a `GET_YIELD_FROM_ITER` instruction it produces `GET_AWAITABLE`:
+
+```python
+# await.py
+
+async def coro():
+    res = await another_coro
+```
+
+```text
+$ python -m dis await.py 
+...
+Disassembly of <code object coro at 0x10d96e7c0, file "await.py", line 3>:
+  4           0 LOAD_GLOBAL              0 (another_coro)
+              2 GET_AWAITABLE
+              4 LOAD_CONST               0 (None)
+              6 YIELD_FROM
+              8 STORE_FAST               0 (res)
+...
+```
+
+`GET_AWAITABLE` checks whether the object to yield from is a native coroutine or a generator-based coroutine, in which case it leaves the object as is. Otherwise, it replaces the object with `obj.__await__()`.
+
+I've tried to give a succinct summary of generators and coroutines in this section. If you still have questions left, I recommend you look at the CPython source code. See [`Include/cpython/code.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/code.h) for the code object definition, [`Include/funcobject.h`](https://github.com/python/cpython/blob/3.9/Include/funcobject.h) for the function object definition and [`Include/cpython/frameobject.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/frameobject.h) for the frame definition. Look at [`Objects/genobject.c`](https://github.com/python/cpython/blob/3.9/Objects/genobject.c) to learn more about generators and coroutines. And look at [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c) to learn what different bytecode instructions do.
+
+Before we conclude this post, let me say a few words about a Python module that you're very likely to use in your `async`/`await` programs.
+
+## asyncio
+
+`asyncio` came to Python around the same time `async`/`await` was introduced (see [PEP 3156](https://www.python.org/dev/peps/pep-3156/)). This module does a lot of things but essentially it provides an event loop and a bunch of classes, functions and coroutines for asynchronous programming. 
+
+The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled tasks and ran the tasks by calling `send(None)`. When a task yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the task waits for `event` on `socket`. It then registered the task with the selector to reschedule the task when the event happenes.
+
+Coroutines do not talk to the `asyncio` event loop by yielding messages. Instead, the event loop provides methods that register callbacks for different events. For example, `loop.add_reader(fd, callback, *args)` registers `callback` to be invoked when a file descriptor `fd` becomes available for reading. That's the first difference.
+
+Another difference is that the `asyncio` event loop does not maintain a queue of scheduled tasks (coroutines) because it only schedules and invokes callbacks. At the same time, it provides `loop.create_task()` and other methods to schedule and run coroutines. How does it do that? Let's see.
 
