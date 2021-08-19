@@ -1108,7 +1108,80 @@ Before we conclude this post, let me say a few words about a Python module that 
 
 `asyncio` came to Python around the same time `async`/`await` was introduced (see [PEP 3156](https://www.python.org/dev/peps/pep-3156/)). This module does a lot of things but essentially it provides an event loop and a bunch of classes, functions and coroutines for asynchronous programming. 
 
-The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled tasks and ran the tasks by calling `send(None)`. When a task yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the task waits for `event` on `socket`. It then registered the task with the selector to reschedule the task when the event happenes.
+The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then registered the coroutine with the selector to reschedule it when the event happens.
+
+The `asyncio` event loop is different in that it does not maintain a queue of scheduled coroutines but only schedules and invokes callbacks. Nevertheless, it provides [`loop.create_task()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_task) and other methods to schedule and run coroutines. How does it do that? Let's see.
+
+The event loop maintains three types of registered callbacks:
+
+* The ready callbacks. These are stored in the `loop._ready` queue and can be scheduled by calling the [`loop.call_soon()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_soon) and [`loop.call_soon_threadsafe()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_soon_threadsafe) methods.
+
+* The callbacks that become ready at some future time. These are stored in the `loop._scheduled` queue and can be scheduled by calling the [`loop.call_later()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_later) and [`loop.call_at()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_at) methods.
+* The callbacks that become ready when a file descriptor becomes ready for reading or writing. These are monitored using a selector and can be registered by calling the [`loop.add_reader()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_reader) and [`loop.add_writer()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_writer) methods.
+
+--
+
+This approach works fine  as long as coroutines yield control because they wait for some I/O event. But there can be other reasons to yield the control, and we need to extend the event loop to support them.
+
+Suppose a coroutine wants to perform a computation that takes a lot of time. To avoid blocking the event loop, it should submit the computation to a separate thread, yield the control and tell the event loop that it should be resumed when the result of the computation becomes available. The event loop could provide a utility coroutine that implements this logic. The coroutine would set up a socket pair to send the result so that I/O multiplexing could be used for rescheduling:
+
+```python
+# event_loop_05_thread.py
+
+from collections import deque
+import pickle
+import selectors
+import socket
+import types
+import threading
+
+
+class EventLoopThread:
+    # ...
+    
+    @types.coroutine
+    def to_thread(self, callable):
+        def callable_wrapper():
+            result = callable()
+            sock1.sendall(pickle.dumps(result))
+
+        sock1, sock2 = socket.socketpair()
+        threading.Thread(target=callable_wrapper).start()
+        yield 'wait_read', sock2
+        return pickle.loads(sock2.recv(4096))
+		
+    # ...
+```
+
+The coroutine could then be used as follows:
+
+```python
+def compute():
+    # some long computation
+
+async def coro():
+    res =  await loop.to_thread(compute)
+```
+
+`asyncio` takes 
+
+ as long as coroutines yield control because they wait for some I/O event. But there can be other reasons to yield the control. Suppose a coroutine wants to perform a computation that takes a lot of time. To avoid blocking the event loop, it should submit the computation to a separate thread, yield the control and tell the event loop that it should be resumed when the result of the computation becomes available. The event loop could provide a utility coroutine that does all of that. The coroutine would take a callable 
+
+The event loop could support this by providing a coroutine that takes a callable and runs it in a separate thread
+
+ creates a pair of connected sockets, then runs 
+
+```pycon
+@types.coroutine
+def coro():
+    res = yield 'wait_thread', compute
+```
+
+
+
+
+
+The event loop could support this by 
 
 Coroutines do not talk to the `asyncio` event loop by yielding messages. Instead, the event loop provides methods that register callbacks for different events. For example, `loop.add_reader(fd, callback, *args)` registers `callback` to be invoked when a file descriptor `fd` becomes available for reading. That's the first difference.
 
