@@ -1108,7 +1108,7 @@ Before we conclude this post, let me say a few words about a Python module that 
 
 `asyncio` came to Python around the same time `async`/`await` was introduced (see [PEP 3156](https://www.python.org/dev/peps/pep-3156/)). This module does a lot of things but essentially it provides an event loop and a bunch of classes, functions and coroutines for asynchronous programming. 
 
-The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then registered the coroutine with the selector to reschedule it when the event happens.
+The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then monitored the socket with a selector and rescheduled the coroutine when the event happened.
 
 The `asyncio` event loop is different in that it does not maintain a queue of scheduled coroutines but only schedules and invokes callbacks. Nevertheless, it provides [`loop.create_task()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_task) and other methods to schedule and run coroutines. How does it do that? Let's see.
 
@@ -1116,74 +1116,77 @@ The event loop maintains three types of registered callbacks:
 
 * The ready callbacks. These are stored in the `loop._ready` queue and can be scheduled by calling the [`loop.call_soon()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_soon) and [`loop.call_soon_threadsafe()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_soon_threadsafe) methods.
 
-* The callbacks that become ready at some future time. These are stored in the `loop._scheduled` queue and can be scheduled by calling the [`loop.call_later()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_later) and [`loop.call_at()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_at) methods.
+* The callbacks that become ready at some future time. These are stored in the `loop._scheduled` priority queue and can be scheduled by calling the [`loop.call_later()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_later) and [`loop.call_at()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_at) methods.
 * The callbacks that become ready when a file descriptor becomes ready for reading or writing. These are monitored using a selector and can be registered by calling the [`loop.add_reader()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_reader) and [`loop.add_writer()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_writer) methods.
 
---
+The methods listed above wrap the callback to be scheduled in a [`Handle`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.Handle) or a [`TimerHandle`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.TimerHandle) instance, and then schedule and return the instance. `Handle` provides the [`handle.cancel()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.Handle.cancel) method that allows the caller to cancel the callback. `TimerHandle` is a subclass of `Handle` for wrapping callbacks scheduled at some future time. It implements the comparison special methods like [`__le__()`](https://docs.python.org/3/reference/datamodel.html#object.__le__) so that the sooner the callback is scheduled the less it is. The `loop._scheduled` priority queue uses this to keep callbacks sorted by time.
 
-This approach works fine  as long as coroutines yield control because they wait for some I/O event. But there can be other reasons to yield the control, and we need to extend the event loop to support them.
+The [`loop._run_once()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/base_events.py#L1802) method runs one iteration of the event loop. Here's the summary of what it does:
 
-Suppose a coroutine wants to perform a computation that takes a lot of time. To avoid blocking the event loop, it should submit the computation to a separate thread, yield the control and tell the event loop that it should be resumed when the result of the computation becomes available. The event loop could provide a utility coroutine that implements this logic. The coroutine would set up a socket pair to send the result so that I/O multiplexing could be used for rescheduling:
+1. It removes cancelled callbacks from `loop._scheduled`.
+2. It calls `loop._selector.select()` and then processes the events by adding the callbacks to `loop._ready`.
+3. It moves callbacks whose time has come from `loop._scheduled` to `loop._ready`.
+4. It pops callbacks from `loop._ready` and invokes those that are not cancelled.
+
+So, how does this callback-based event loop run coroutines? Let's take a look at the `loop.create_task()` method. To schedule a coroutine, it wraps the coroutine in a [`Task`](https://docs.python.org/3/library/asyncio-task.html#asyncio.Task) instance. The `Task.__init__()` method schedules `task.__step()` as a callback by calling `loop.call_soon()`. And this is the trick: `task.__step()` runs the coroutine.
+
+The [`task.__step()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/tasks.py#L215) method runs the coroutine once by calling `coro.send(None)`. The coroutine doesn't yield messages. It can yield either `None` or a `Future` instance. `None` means that the coroutine simply wants to yield the control. This is what `asyncio.sleep(0)` does, for example. In this case, `task.__step()` reschedules itself.
+
+A [`Future`](https://docs.python.org/3/library/asyncio-future.html#asyncio.Future) instance represents the result of some operation that may not be available yet. When a coroutine yields a future, it basically tells the event loop: "I'm waiting for this result. It may not be available yet, so I'm yielding the control. Wake me up when the result becomes available".
+
+What does `task.__step()` do with a future? It calls `future.add_done_callback()` to add to the future a callback that reschedules `task.__step()`. If the result is already available, the callback is invoked immediately. Otherwise, it's invoked when someone sets the result by calling `future.set_result()`.
+
+Native coroutines cannot `yield`. Does it mean that we have to write a generator-based coroutine any time we need to `yield` a future? No. A native coroutine can simply `await` on futures, like so:
 
 ```python
-# event_loop_05_thread.py
+async def future_waiter():
+    res = await some_future
+```
 
-from collections import deque
-import pickle
-import selectors
-import socket
-import types
-import threading
+To support this, futures implement `__await__()` that yields the future itself and then return the result:
 
-
-class EventLoopThread:
+```python
+class Future:
     # ...
     
-    @types.coroutine
-    def to_thread(self, callable):
-        def callable_wrapper():
-            result = callable()
-            sock1.sendall(pickle.dumps(result))
-
-        sock1, sock2 = socket.socketpair()
-        threading.Thread(target=callable_wrapper).start()
-        yield 'wait_read', sock2
-        return pickle.loads(sock2.recv(4096))
-		
-    # ...
+    def __await__(self):
+        if not self.done():
+            self._asyncio_future_blocking = True
+            yield self  # This tells Task to wait for completion.
+        if not self.done():
+            raise RuntimeError("await wasn't used with future")
+        return self.result()  # May raise too.
 ```
 
-The coroutine could then be used as follows:
+Who can set the result on a future? Let's take an example. Consider a function that returns a future for the socket incoming data. Such a function can be implemented as follows:
+
+1. Create a new `Future` instance.
+2. Call `loop.add_reader()` to register a callback for the socket. The event loop will invoke the callback when the socket becomes ready for reading, and the callback will read data from the socket and set the data as the future's result.
+3. Return the future to the caller.
+
+If the caller is a coroutine that awaits on the future, it will yield the future to `task.__step()`, and `task.__step()` will ensure that the coroutine is rescheduled when the result becomes available.
+
+A coroutine can wait for the result of other coroutine by awaiting on that coroutine:
 
 ```python
-def compute():
-    # some long computation
-
 async def coro():
-    res =  await loop.to_thread(compute)
+    res = await other_coro()
 ```
 
-`asyncio` takes 
+or it can schedule the coroutine, get a `Task` instance and then `await` on the task:
 
- as long as coroutines yield control because they wait for some I/O event. But there can be other reasons to yield the control. Suppose a coroutine wants to perform a computation that takes a lot of time. To avoid blocking the event loop, it should submit the computation to a separate thread, yield the control and tell the event loop that it should be resumed when the result of the computation becomes available. The event loop could provide a utility coroutine that does all of that. The coroutine would take a callable 
-
-The event loop could support this by providing a coroutine that takes a callable and runs it in a separate thread
-
- creates a pair of connected sockets, then runs 
-
-```pycon
-@types.coroutine
-def coro():
-    res = yield 'wait_thread', compute
+```python
+async def coro():
+    task = asyncio.create_task(other_coro())
+    res = await task
+    print(res)
 ```
 
+`Task` subclasses `Future` so that tasks can be awaited on.
+
+And that's basically how the core of `asyncio` works. There two facts about it that we should remember. First, the `asyncio` event loop is based on callbacks. This approach is more flexible than running coroutines directly. Second, coroutines do not yield messages to the event loop but yield futures. Futures allow coroutines to wait for different things, not only for I/O events. For example, a coroutine may submit a long-running computation to a separate thread and `await` on a future that represents the result of this computation. We could implement such a coroutine on top of sockets, but it would be less elegant and general than the solution with a future.
+
+## Conclusion
 
 
-
-
-The event loop could support this by 
-
-Coroutines do not talk to the `asyncio` event loop by yielding messages. Instead, the event loop provides methods that register callbacks for different events. For example, `loop.add_reader(fd, callback, *args)` registers `callback` to be invoked when a file descriptor `fd` becomes available for reading. That's the first difference.
-
-Another difference is that the `asyncio` event loop does not maintain a queue of scheduled tasks (coroutines) because it only schedules and invokes callbacks. At the same time, it provides `loop.create_task()` and other methods to schedule and run coroutines. How does it do that? Let's see.
 
