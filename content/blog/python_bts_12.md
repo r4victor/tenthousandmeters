@@ -10,7 +10,7 @@ Code written in the `async`/`await` style looks like regular synchronous code bu
 
 Computers execute programs sequentially – one instruction after another. But a typical program performs multiple tasks, and it doesn't always make sense to wait for some task to complete before starting the next one. For example, a chess program that waits for a player to make a move should be able to update the clock in the meantime. Such an ability of a program to deal with multiple things simultaneously is what we call **concurrency**. Concurrency doesn't mean that multiple tasks must run at the same physical time. They can run in an interleaved manner: a task runs for some time, then suspends and lets other tasks run, hoping it will get more time in the future. For this reason, a modern OS can run thousands of processes on a machine that has only a few cores. If multiple tasks do run at the same physical time, as in the case of a multi-core machine or a cluster, then we have **parallelism**, a special case of concurrency.
 
-A picture??
+<img src="{static}/blog/python_bts_12/concurrency.png" alt="concurrency" style="width:580px; display: block; margin: 25px auto 0 auto;" />
 
 It's crucial to understand that you can write concurrent programs without any special support from the language. Suppose you write a program that performs two tasks, each task being represented by a separate function:
 
@@ -403,7 +403,7 @@ Generators produce values in a lazy, on-demand manner, so they are memory-effici
 
 Take any program that performs multiple tasks. Turn functions that represent these tasks into generators by inserting few `yield` statements here and there. Then run the generators in a round-robin fashion: call `next()` on every generator in some fixed order and repeat this step until all the generators are exhausted. You'll get a concurrent program that runs like this:
 
-picture??
+<img src="{static}/blog/python_bts_12/generators.png" alt="generators" style="width:580px; display: block; margin: 25px auto;" />
 
 Let's apply this strategy to the sequential server to make it concurrent. First, we insert some `yield` statements. I suggest to insert them before every blocking operation. Then, we need to run generators. I suggest to write a class that maintains a queue of scheduled generators (or simply tasks) and provides the `run()` method that runs the tasks in a loop in a round-robin fashion. We'll call this class `EventLoopNoIO` since it functions like an event loop except that it doesn't do I/O multiplexing. Here's the server code:
 
@@ -1196,5 +1196,5 @@ Python didn't invent `async`/`await`. You can also find it in [C#](https://docs.
 
 `asyncio` is a solid library, but it has its issues. The callback-based event loop allows `asyncio` to provide an API for both callback-style and `async`/`await`-style programming. But an event-loop that runs coroutines directly, like those that we wrote in this post, [can be much simpler](https://vorpus.org/blog/some-thoughts-on-asynchronous-api-design-in-a-post-asyncawait-world/#other-challenges-for-hybrid-apis) in both implementation and usage. The [`curio`](https://github.com/dabeaz/curio) and [`trio`](https://github.com/python-trio/trio) modules are notable alternatives to `asyncio` that take this approach.
 
-To sum up, concurrecy is inherently hard, and no programming model can make it easy. `async`/`await` makes it manageable, though, and this post should help you take the full advantage of this Python feature.
+To sum up, concurrecy is inherently hard, and no programming model can make it easy. Some models make it manageable, though, and this post should help you master one such model – Python's `async`/`await`.
 
