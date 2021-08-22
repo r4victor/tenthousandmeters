@@ -955,7 +955,7 @@ And we're done! We've implemented an `async`/`await`-based concurrent server fro
 
 By now, you should understand what `async`/`await` is about. But you also should have questions about implementation details of generators, coroutines, `yield`, `yield from` and `await`. We're going to cover all of that in the next section.
 
-## How generators and coroutines are implemented
+## How generators and coroutines are implemented *
 
 If you've been following this series, you effectively know how Python implements generators. First recall that [the compiler]({filename}/blog/python_bts_02.md) creates a code object for every code block that it encounters, where a code block can be a module, a function or a class body. A code object describes what the code block does. It contains the block's bytecode, constants, variable names and other relevant information. A function is an object that stores the function's code object and such things as the function's name, default arguments and `__doc__` attribute.
 
@@ -1031,13 +1031,13 @@ Disassembly of <code object g at 0x1051117c0, file "yield_from.py", line 3>:
 
 The job of `GET_YIELD_FROM_ITER` is to ensure that the object to yield from, which is the value on top of the stack, is an iterator. If the object is a generator, `GET_YIELD_FROM_ITER` leaves it as is. Otherwise, `GET_YIELD_FROM_ITER` replaces the object with `iter(obj)`.
 
-The first thing `YIELD_FROM` does is pop a value from the stack. Usually, this value is a value pushed by `send()`. But `send()` pushes nothing on the first run, so the compiler emits before `YIELD_FROM` a `LOAD_CONST` instruction that pushes `None`.
+The first thing `YIELD_FROM` does is pop a value from the stack. Usually, this value is a value pushed by `send()`. But `send()` pushes nothing on the first run, so the compiler emits a `LOAD_CONST` instruction that pushes `None` before `YIELD_FROM`.
 
-The second thing `YIELD_FROM` does is peek the object to yield from. If the value to send is `None`, `YIELD_FROM` calls `obj.__next__()`. Otherwise, it calls `obj.send(value)`. If the call raises a `StopIteration` exception, `YIELD_FROM` replaces the object on top of the stack (i.e. the object to yield from) with the result, and the frame execution continues. If the call returns a value without exceptions, `YIELD_FROM` stops the frame execution and returns the value to `send()`. In the latter case, it also sets the instruction pointer in such a way so that the next execution of the frame starts with `YIELD_FROM` again. What will be different on the subsequent runs is the state of the object to yield from and the value to send.
+The second thing `YIELD_FROM` does is peek the object to yield from. If the value to send is `None`, `YIELD_FROM` calls `obj.__next__()`. Otherwise, it calls `obj.send(value)`. If the call raises a `StopIteration` exception, `YIELD_FROM` handles the exception: it replaces the object on top of the stack (i.e. the object to yield from) with the result, and the frame execution continues. If the call returns a value without exceptions, `YIELD_FROM` stops the frame execution and returns the value to `send()`. In the latter case, it also sets the instruction pointer in such a way so that the next execution of the frame starts with `YIELD_FROM` again. What will be different on the subsequent runs is the state of the object to yield from and the value to send.
 
 A native coroutine is basically a generator object that has a different type. The difference between the types is that the `generator` type implements `__iter__()` and `__next__()`, while the `coroutine` type implements `__await__()`. The implementation of `send()` is the same.
 
-The compiler produces the same bytecode instructions for an `await` expression as for `yield from` except that instead of a `GET_YIELD_FROM_ITER` instruction it produces `GET_AWAITABLE`:
+The compiler emits the same bytecode instructions for an `await` expression as for `yield from` except that instead of a `GET_YIELD_FROM_ITER` instruction it emits `GET_AWAITABLE`:
 
 ```python
 # await.py
@@ -1060,15 +1060,15 @@ Disassembly of <code object coro at 0x10d96e7c0, file "await.py", line 3>:
 
 `GET_AWAITABLE` checks whether the object to yield from is a native coroutine or a generator-based coroutine, in which case it leaves the object as is. Otherwise, it replaces the object with `obj.__await__()`.
 
-I've tried to give a succinct summary of generators and coroutines in this section. If you still have questions left, I recommend you look at the CPython source code. See [`Include/cpython/code.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/code.h) for the code object definition, [`Include/funcobject.h`](https://github.com/python/cpython/blob/3.9/Include/funcobject.h) for the function object definition and [`Include/cpython/frameobject.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/frameobject.h) for the frame definition. Look at [`Objects/genobject.c`](https://github.com/python/cpython/blob/3.9/Objects/genobject.c) to learn more about generators and coroutines. And look at [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c) to learn what different bytecode instructions do.
+That's basically how generators and coroutines work. If you still have questions left, I recommend you study the CPython source code. See [`Include/cpython/code.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/code.h) for the code object definition, [`Include/funcobject.h`](https://github.com/python/cpython/blob/3.9/Include/funcobject.h) for the function object definition and [`Include/cpython/frameobject.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/frameobject.h) for the frame definition. Look at [`Objects/genobject.c`](https://github.com/python/cpython/blob/3.9/Objects/genobject.c) to learn more about generators and coroutines, and look at [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c) to learn what different bytecode instructions do.
 
-Before we conclude this post, let me say a few words about a Python module that you're very likely to use in your `async`/`await` programs.
+We've figured out how `async`/`await` works, but we also need an event loop to run `async`/`await` programs. You're unlikely to write your own event loops as we did in this post because that's a lot work. What you usually do instead is use some event loop library. So before we colculde this post, let me say a few words about the library you're most likely to use.
 
 ## asyncio
 
-[`asyncio`](https://docs.python.org/3/library/asyncio.html) came to Python around the same time `async`/`await` was introduced (see [PEP 3156](https://www.python.org/dev/peps/pep-3156/)). This module does a lot of things but essentially it provides an event loop and a bunch of classes, functions and coroutines for asynchronous programming. 
+[`asyncio`](https://docs.python.org/3/library/asyncio.html) came to the Python standard library around the same time `async`/`await` was introduced (see [PEP 3156](https://www.python.org/dev/peps/pep-3156/)). It does a lot of things, but essentially it provides an event loop and a bunch of classes, functions and coroutines for asynchronous programming. 
 
-The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then monitored the socket with a selector and rescheduled the coroutine when the event happened.
+The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then started monitoring the socket with a selector and rescheduled the coroutine when the event happened.
 
 The `asyncio` event loop is different in that it does not maintain a queue of scheduled coroutines but only schedules and invokes callbacks. Nevertheless, it provides [`loop.create_task()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_task) and other methods to schedule and run coroutines. How does it do that? Let's see.
 
@@ -1079,14 +1079,14 @@ The event loop maintains three types of registered callbacks:
 * The callbacks that become ready at some future time. These are stored in the `loop._scheduled` priority queue and can be scheduled by calling the [`loop.call_later()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_later) and [`loop.call_at()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.call_at) methods.
 * The callbacks that become ready when a file descriptor becomes ready for reading or writing. These are monitored using a selector and can be registered by calling the [`loop.add_reader()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_reader) and [`loop.add_writer()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_writer) methods.
 
-The methods listed above wrap the callback to be scheduled in a [`Handle`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.Handle) or a [`TimerHandle`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.TimerHandle) instance, and then schedule and return the instance. `Handle` provides the [`handle.cancel()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.Handle.cancel) method that allows the caller to cancel the callback. `TimerHandle` is a subclass of `Handle` for wrapping callbacks scheduled at some future time. It implements the comparison special methods like [`__le__()`](https://docs.python.org/3/reference/datamodel.html#object.__le__) so that the sooner the callback is scheduled the less it is. The `loop._scheduled` priority queue uses this to keep callbacks sorted by time.
+The methods listed above wrap the callback to be scheduled in a [`Handle`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.Handle) or a [`TimerHandle`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.TimerHandle) instance and then schedule and return the handle. `Handle` instances provide the [`handle.cancel()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.Handle.cancel) method that allows the caller to cancel the callback. `TimerHandle` is a subclass of `Handle` for wrapping callbacks scheduled at some future time. It implements the comparison special methods like [`__le__()`](https://docs.python.org/3/reference/datamodel.html#object.__le__) so that the sooner a callback is scheduled the less it is. Due to `TimerHandle`, the `loop._scheduled` priority queue keeps callbacks sorted by time.
 
-The [`loop._run_once()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/base_events.py#L1802) method runs one iteration of the event loop. Here's the summary of what it does:
+The [`loop._run_once()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/base_events.py#L1802) method runs one iteration of the event loop. The iteration consists of the following steps:
 
-1. It removes cancelled callbacks from `loop._scheduled`.
-2. It calls `loop._selector.select()` and then processes the events by adding the callbacks to `loop._ready`.
-3. It moves callbacks whose time has come from `loop._scheduled` to `loop._ready`.
-4. It pops callbacks from `loop._ready` and invokes those that are not cancelled.
+1. Remove cancelled callbacks from `loop._scheduled`.
+2. Call `loop._selector.select()` and then process the events by adding the callbacks to `loop._ready`.
+3. Move callbacks whose time has come from `loop._scheduled` to `loop._ready`.
+4. Pop callbacks from `loop._ready` and invoke those that are not cancelled.
 
 So, how does this callback-based event loop run coroutines? Let's take a look at the `loop.create_task()` method. To schedule a coroutine, it wraps the coroutine in a [`Task`](https://docs.python.org/3/library/asyncio-task.html#asyncio.Task) instance. The `Task.__init__()` method schedules `task.__step()` as a callback by calling `loop.call_soon()`. And this is the trick: `task.__step()` runs the coroutine.
 
@@ -1094,7 +1094,7 @@ The [`task.__step()`](https://github.com/python/cpython/blob/b2f68b1900355408720
 
 A [`Future`](https://docs.python.org/3/library/asyncio-future.html#asyncio.Future) instance represents the result of some operation that may not be available yet. When a coroutine yields a future, it basically tells the event loop: "I'm waiting for this result. It may not be available yet, so I'm yielding the control. Wake me up when the result becomes available".
 
-What does `task.__step()` do with a future? It calls `future.add_done_callback()` to add to the future a callback that reschedules `task.__step()`. If the result is already available, the callback is invoked immediately. Otherwise, it's invoked when someone sets the result by calling `future.set_result()`.
+What does `task.__step()` do with a future? It calls `future.add_done_callback()` to add to the future a callback that reschedules `task.__step()`. If the result is already available, the callback is invoked immediately. Otherwise, it's invoked when someone/something sets the result by calling `future.set_result()`.
 
 Native coroutines cannot `yield`. Does it mean that we have to write a generator-based coroutine any time we need to `yield` a future? No. A native coroutine can simply `await` on futures, like so:
 
@@ -1103,7 +1103,7 @@ async def future_waiter():
     res = await some_future
 ```
 
-To support this, futures implement `__await__()` that yields the future itself and then return the result:
+To support this, futures implement `__await__()` that yields the future itself and then returns the result:
 
 ```python
 class Future:
@@ -1118,31 +1118,30 @@ class Future:
         return self.result()  # May raise too.
 ```
 
-Who can set the result on a future? Let's take an example. Consider a function that returns a future for the socket incoming data. Such a function can be implemented as follows:
+What sets the result on a future? Let's take a function that returns a future for the socket incoming data as an example. Such a function can be implemented as follows:
 
 1. Create a new `Future` instance.
-2. Call `loop.add_reader()` to register a callback for the socket. The event loop will invoke the callback when the socket becomes ready for reading, and the callback will read data from the socket and set the data as the future's result.
+2. Call `loop.add_reader()` to register a callback for the socket. The callback should read data from the socket and set the data as the future's result.
 3. Return the future to the caller.
 
-If the caller is a coroutine that awaits on the future, it will yield the future to `task.__step()`, and `task.__step()` will ensure that the coroutine is rescheduled when the result becomes available.
+If the caller is a task that awaits on the future, it will yield the future to `task.__step()`. The `task.__step()` method will add a callback to the future, and this callback will reschedule the task when the callback from step 2 sets the result.
 
-A coroutine can wait for the result of other coroutine by awaiting on that coroutine:
+We know that a coroutine can wait for the result of another coroutine by awaiting on that coroutine:
 
 ```python
 async def coro():
-    res = await other_coro()
+    res = await another_coro()
 ```
 
-or it can schedule the coroutine, get a `Task` instance and then `await` on the task:
+But it can also schedule the coroutine, get a `Task` instance and then `await` on the task:
 
 ```python
 async def coro():
-    task = asyncio.create_task(other_coro())
+    task = asyncio.create_task(another_coro())
     res = await task
-    print(res)
 ```
 
-`Task` subclasses `Future` so that tasks can be awaited on.
+`Task` subclasses `Future` so that tasks can be awaited on. What sets the result on a task? It's `task.__step()`. If `coro.send(None)` raises a `StopIteration` exception, `task.__step()` handles the exception and sets the task's result.
 
 And that's basically how the core of `asyncio` works. There two facts about it that we should remember. First, the event loop is based on callbacks, and the coroutines support is implemented on top of that. Second, coroutines do not yield messages to the event loop but yield futures. Futures allow coroutines to wait for different things, not only for I/O events. For example, a coroutine may submit a long-running computation to a separate thread and `await` on a future that represents the result of the computation. We could implement such a coroutine on top of sockets, but it would be less elegant and general than the solution with a future.
 
@@ -1150,7 +1149,7 @@ And that's basically how the core of `asyncio` works. There two facts about it t
 
 The `async`/`await` pattern has gained popularity in recent years. Concurrency is as relevant today as ever, and traditional approaches for achieving it, such as OS threads and callbacks, cannot always provide an adequate solution. OS threads work fine in some cases, but in many other cases the concurrency can be implemented much better at the language/application level. A callback-based event loop is techically as good as any `async`/`await` solution, but who likes writing callbacks?
 
-I'm not saying that `async`/`await` is the only right approach to concurrency. Many find other approaches to be better. Take the [communicating sequential processes model](https://en.wikipedia.org/wiki/Communicating_sequential_processes) implemented in [Go](https://golang.org/doc/effective_go#concurrency) and [Clojure](https://clojuredocs.org/clojure.core.async) or the [actor model](https://en.wikipedia.org/wiki/Actor_model) implemented in [Erlang](https://erlang.org/doc/getting_started/conc_prog.html) and [Akka](https://doc.akka.io/docs/akka/current/typed/guide/introduction.html) as examples. Still, `async`/`await` seems to be the best model we have in Python today.
+It's not to say that `async`/`await` is the only right approach to concurrency. Many find other approaches to be better. Take the [communicating sequential processes model](https://en.wikipedia.org/wiki/Communicating_sequential_processes) implemented in [Go](https://golang.org/doc/effective_go#concurrency) and [Clojure](https://clojuredocs.org/clojure.core.async) or the [actor model](https://en.wikipedia.org/wiki/Actor_model) implemented in [Erlang](https://erlang.org/doc/getting_started/conc_prog.html) and [Akka](https://doc.akka.io/docs/akka/current/typed/guide/introduction.html) as examples. Still, `async`/`await` seems to be the best model we have in Python today.
 
 Python didn't invent `async`/`await`. You can also find it in [C#](https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/async/), [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function), [Rust](https://rust-lang.github.io/async-book/01_getting_started/01_chapter.html), and [Swift](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html), to name a few. I'm biased towards Python's implementation because I understand it best, but objectely, it's not the most refined. It mixes generators, generator-based coroutines, native coroutines, `yield from` and `await`, which makes it harder to understand. Nevertheless, once you understand these concepts, Python's `async`/`await` seems pretty straightforward.
 
