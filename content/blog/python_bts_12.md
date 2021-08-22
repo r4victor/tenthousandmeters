@@ -50,7 +50,7 @@ def main():
 
 Of course, this is an oversimplified example. The point here is that the language doesn't determine whether you can write concurrent programs or not but may provide features that make concurrent programming more convenient. As we'll learn today, `async`/`await` is just such a feature.
 
-To see how one goes from concurrency to  `async`/`await`, we'll write a real-world concurrent program – a TCP echo server that supposed to handle multiple clients simultaneously. We'll start with the simplest, sequential version of the server that is not concurrent. Then, we'll make it concurrent using OS threads. After that, we'll see how we can write a concurrent version that runs in a single thread using I/O multiplexing and event loops. From this point onwards, we'll develop the single-threaded approach by introducing generators, coroutines and, finally, `async`/`await`.
+To see how one goes from concurrency to  `async`/`await`, we'll write a real-world concurrent program – a TCP echo server that supposed to handle multiple clients simultaneously. We'll start with the simplest, sequential version of the server that is not concurrent. Then we'll make it concurrent using OS threads. After that, we'll see how we can write a concurrent version that runs in a single thread using I/O multiplexing and event loops. From this point onwards, we'll develop the single-threaded approach by introducing generators, coroutines and, finally, `async`/`await`.
 
 ## A sequential server
 
@@ -407,7 +407,7 @@ Take any program that performs multiple tasks. Turn functions that represent the
 
 <img src="{static}/blog/python_bts_12/generators.png" alt="generators" style="width:580px; display: block; margin: 25px auto;" />
 
-Let's apply this strategy to the sequential server to make it concurrent. First, we need insert some `yield` statements. I suggest to insert them before every blocking operation. Then, we need to run generators. I suggest to write a class that does this. The class should provide the `create_task()` method that adds a generator to a queue of scheduled generators (or simply tasks) and the `run()` method that runs the tasks in a loop in a round-robin fashion. We'll call this class `EventLoopNoIO` since it functions like an event loop except that it doesn't do I/O multiplexing. Here's the server code:
+Let's apply this strategy to the sequential server to make it concurrent. First, we need to insert some `yield` statements. I suggest to insert them before every blocking operation. Then, we need to run generators. I suggest to write a class that does this. The class should provide the `create_task()` method that adds a generator to a queue of scheduled generators (or simply tasks) and the `run()` method that runs the tasks in a loop in a round-robin fashion. We'll call this class `EventLoopNoIO` since it functions like an event loop except that it doesn't do I/O multiplexing. Here's the server code:
 
 ```python
 # echo_05_yield_no_io.py
@@ -640,13 +640,13 @@ In fact, the generator's `__next__()` method became simply a shorthand for `send
 
 Generators also got the [`throw()`](https://docs.python.org/3/reference/expressions.html#generator.throw) method that runs the generator like `send()` or `__next__()` but also raises a specified exception at the suspension point and the [`close()`](https://docs.python.org/3/reference/expressions.html#generator.close) method that raises a [`GeneratorExit`](https://docs.python.org/3/library/exceptions.html#GeneratorExit) exception.
 
-The introduction of `send()` allowed us to write "reverse" generators that get input values with `yield` and send output values to some other generator by calling `send()`. See David Beazley's [excellent talk](https://www.youtube.com/watch?v=Z_OAlIhXziw) to learn more about that. We're, however, insterested in this enhancement because it provided a solution to the subgenerator issue. Instead of running a subgenerator inplace, a generator could now `yield` it to the event loop, and the event loop would run the subgenerator and then `send()` the result back to the generator (or throw an exception into the generator if the subgenerator raised one). The generator would call the subgenerator like this:
+Here's how this enhancement solved the subgenerator issue. Instead of running a subgenerator inplace, a generator could now `yield` it to the event loop, and the event loop would run the subgenerator and then `send()` the result back to the generator (or throw an exception into the generator if the subgenerator raised one). The generator would call the subgenerator like this:
 
 ```python
 recieved_data = yield async_recv(sock)
 ```
 
-and this call would work just as if one coroutine calls another.
+And this call would work just as if one coroutine calls another.
 
 This solution requires some non-trivial logic in the event loop, and you may find it hard to understand. Don't worry. You don't have to. [PEP 380](https://www.python.org/dev/peps/pep-0380/) introduced a much more intuitive solution for implementing coroutines in Python 3.3.
 
@@ -665,65 +665,23 @@ for i in iterable:
     yield i
 ```
 
-But `yield from` does a bit more when you use it with generators. It does exactly what a generator is supposed to do to run a subgenerator inplace. It calls `next()` on the subgenerator and reyields the yielded value, gets the value sended to the generator and repasses it to the subgenerator with `send()`, reyields the next yielded value and continues this process until the subgenerator raises an exception. It catches the `StopIteration` exception and extracts the result from it. It also propagates any exception raised by calling the generator's [`throw()`](https://docs.python.org/3/reference/expressions.html#generator.throw) method into the subgenerator and closes the subgenerator if the generator's [`close()`](https://docs.python.org/3/reference/expressions.html#generator.close) method was called. All in all, the PEP [says](https://www.python.org/dev/peps/pep-0380/#id13) that this statement:
+But `yield from` does much more when you use it with generators. It does exactly what a generator has to do to run a subgenerator inplace, and that's why we're discussing it. The main steps of `yield from` are:
 
-```python
-RESULT = yield from EXPR
-```
+1. Run the subgenerator once with `send(None)`. If `send()` raises a `StopIteration` exception, catch the exception, extract the result, make it a value of the `yield from` expression and stop.
+2. If subgenerator's `send()` returns a value without exceptions, `yield` it and recieve a value sended to the generator.
+3. When recieved the value, repeat step 1 but this time `send()` the received value.
 
-is semantically equivalent to this code:
+This algorithm requires some elaboration. First, `yield from` automatically propagates exceptions thrown by calling the generator's `throw()` and `close()` methods into the subgenerator. The implementation of these methods ensures this. Second, `yield from` applies the same algorithm to non-generator iterables except that it gets an iterator with `iter(iterable)` and then uses `next()` instead `send()` to run the iterator.
 
-```python
-_i = iter(EXPR)
-try:
-    _y = next(_i)
-except StopIteration as _e:
-    _r = _e.value
-else:
-    while 1:
-        try:
-            _s = yield _y
-        except GeneratorExit as _e:
-            try:
-                _m = _i.close
-            except AttributeError:
-                pass
-            else:
-                _m()
-            raise _e
-        except BaseException as _e:
-            _x = sys.exc_info()
-            try:
-                _m = _i.throw
-            except AttributeError:
-                raise _e
-            else:
-                try:
-                    _y = _m(*_x)
-                except StopIteration as _e:
-                    _r = _e.value
-                    break
-        else:
-            try:
-                if _s is None:
-                    _y = next(_i)
-                else:
-                    _y = _i.send(_s)
-            except StopIteration as _e:
-                _r = _e.value
-                break
-RESULT = _r
-```
-
-The code may seem complicated but what it essentially does is make the subgenerator work as if its code were a part of the generator. So this `yield from` call:
+Here's how you can remember what `yield from` does: it makes the subgenerator work as if the subgenerator's code were a part of the generator. So this `yield from` call:
 
 ```python
 recieved_data = yield from async_recv(sock)
 ```
 
-works as if the call were replaced with the code of `async_recv()`. That's also counts as a coroutine call. And in contrast to the previous `yield`-based solution, the event loop logic stays the same.
+works as if the call were replaced with the code of `async_recv()`. That's also counts as a coroutine call, and in contrast to the previous `yield`-based solution, the event loop logic stays the same.
 
-Let's take advantage of `yield from` to make the server's code more concise. First, we factor out every boilerplate `yield` statement and the following socket operation to a separate generator function. We put these functions in the event loop:
+Let's now take advantage of `yield from` to make the server's code more concise. First, we factor out every boilerplate `yield` statement and the following socket operation to a separate generator function. We put these functions in the event loop:
 
 ```python
 # event_loop_03_yield_from.py
@@ -776,7 +734,7 @@ class EventLoopYieldFrom:
 
 ```
 
-Then, we `yield from` the generators in the server's code:
+Then we `yield from` the generators in the server's code:
 
 ```python
 from collections import deque
@@ -815,11 +773,11 @@ if __name__ == '__main__':
     loop.run()
 ```
 
-And that's it! Generators, `yield` and `yield from` are all we need to implement coroutines, and coroutines allow us to write asynchronous, concurrent code. What about `async`/`await`? Well, it's just a synactic feature on top of generators that was introduced to fix the generators' ambiguity.
+And that's it! Generators, `yield` and `yield from` are all we need to implement coroutines, and coroutines allow us to write asynchronous, concurrent code that looks like regular sequential code. What about `async`/`await`? Well, it's just a synactic feature on top of generators that was introduced to Python to fix the generators' ambiguity.
 
 ## async/await
 
-When you see a generator function, you cannot always say immediately whether it's intended to be used as a regular generator or as a coroutine. In both cases, the function looks like any other function defined with `def` and contains a bunch of `yield` and `yield from` expressions. [PEP 492](https://www.python.org/dev/peps/pep-0492/) introduced the `async` and `await` keywords in Python 3.5 to make coroutines a distinct concept. 
+When you see a generator function, you cannot always say immediately whether it's intended to be used as a regular generator or as a coroutine. In both cases, the function looks like any other function defined with `def` and contains a bunch of `yield` and `yield from` expressions. So, to make coroutines a distinct concept, [PEP 492](https://www.python.org/dev/peps/pep-0492/) introduced the `async` and `await` keywords in Python 3.5.
 
 You define a **native coroutine** **function** using the `async def` syntax:
 
@@ -851,7 +809,7 @@ Traceback (most recent call last):
 StopIteration: 2
 ```
 
-The `await` keyword does exactly the same thing with coroutines that `yield from` does with generators. In fact, `await` implemented as `yield from` with some additional checks to ensure that the object being awaited is not a regular generator or some other iterable.
+The `await` keyword does exactly what `yield from` does but for native coroutines. In fact, `await` is implemented as `yield from` with some additional checks to ensure that the object being awaited is not a generator or some other iterable.
 
 When you use generators as coroutines, you must end every chain of `yield from` calls with a generator that does `yield`. Similarly, you must end every chain of `await` calls with a `yield` expression. However, if you try to use a `yield` expression in an `async def` function, what you'll get is not a native coroutine but something called an asynchronous generator:
 
@@ -863,7 +821,7 @@ When you use generators as coroutines, you must end every chain of `yield from` 
 <async_generator object g at 0x1046c6790>
 ```
 
-We're not going spend time on asynchronous generators here, but in a nutshell, they implement the asynchronous version of the iterator protocol: the [`__aiter__()`](https://docs.python.org/3/reference/datamodel.html#object.__aiter__) and [`__anext__()`](https://docs.python.org/3/reference/datamodel.html#object.__anext__) special methods. See [PEP 525 ](https://www.python.org/dev/peps/pep-0525/) to learn more. What's important for us at now is that `__anext__()` is awaitable while asynchronous generators themeselves are not. Thus, we cannot end a chain of `await` calls with an `async def` function containing `yield`. What should we end the chain with? There are two options.
+We're not going spend time on asynchronous generators here, but in a nutshell, they implement the asynchronous version of the iterator protocol: the [`__aiter__()`](https://docs.python.org/3/reference/datamodel.html#object.__aiter__) and [`__anext__()`](https://docs.python.org/3/reference/datamodel.html#object.__anext__) special methods (see [PEP 525 ](https://www.python.org/dev/peps/pep-0525/) to learn more). What's important for us at now is that `__anext__()` is awaitable, while asynchronous generators themeselves are not. Thus, we cannot end a chain of `await` calls with an `async def` function containing `yield`. What should we end the chain with? There are two options.
 
 First, we can write a regular generator function and decorate it with `@types.coroutine`. This decorator sets a special flag on the function behind the generator so that the generator can be used in an `await` expression just like a native coroutine:
 
@@ -896,7 +854,7 @@ As a second option, we can make any object awaitable by defining the [`__await__
 4
 ```
 
-Let's now write the final version of the server using `async`/`await`. First, we mark the server's functions with `async` and change `yield from` calls to `await` calls:
+Let's now write the final version of the server using `async`/`await`. First, we mark the server's functions as `async` and change `yield from` calls to `await` calls:
 
 ```python
 # echo_08_async_await.py
@@ -936,7 +894,7 @@ if __name__ == '__main__':
     loop.run()
 ```
 
-Then, we modify the event loop. We decorate generator functions with `@types.coroutine` so that they can be used with `await` and run the tasks by calling `send(None)` instead of `next()`:
+Then we modify the event loop. We decorate generator functions with `@types.coroutine` so that they can be used with `await` and run the tasks by calling `send(None)` instead of `next()`:
 
 ```python
 # event_loop_04_async_await.py
@@ -995,19 +953,19 @@ class EventLoopAsyncAwait:
 
 And we're done! We've implemented an `async`/`await`-based concurrent server from scratch. It works exactly like the previous version of the server based on `yield from` and only has a slightly different syntax. 
 
-By now, you should understand what `async`/`await` is all about. But you also should have questions about implementation details of generators, coroutines, `yield`, `yield from` and `await`. We're going to cover that  in the next section.
+By now, you should understand what `async`/`await` is about. But you also should have questions about implementation details of generators, coroutines, `yield`, `yield from` and `await`. We're going to cover all of that in the next section.
 
 ## How generators and coroutines are implemented
 
 If you've been following this series, you effectively know how Python implements generators. First recall that [the compiler]({filename}/blog/python_bts_02.md) creates a code object for every code block that it encounters, where a code block can be a module, a function or a class body. A code object describes what the code block does. It contains the block's bytecode, constants, variable names and other relevant information. A function is an object that stores the function's code object and such things as the function's name, default arguments and `__doc__` attribute.
 
-A generator function is an ordinary function whose code object has a `CO_GENERATOR` flag set. When we call a generator function, Python checks for this flag, and if it sees the flag, it returns a generator object instead of executing the function. Similarly, a native coroutine function is an ordinary function whose code object has a `CO_COROUTINE` flag set. Python check for this flag too and returns a native coroutine object if it sees the flag.
+A generator function is an ordinary function whose code object has a `CO_GENERATOR` flag set. When you call a generator function, Python checks for this flag, and if it sees the flag, it returns a generator object instead of executing the function. Similarly, a native coroutine function is an ordinary function whose code object has a `CO_COROUTINE` flag set. Python check for this flag too and returns a native coroutine object if it sees the flag.
 
-To execute a function, Python first creates a frame for it and then executes the frame. A frame is an object that captures the state of the code object execution. It stores the code object itself as well as the values of local variables, references to the dictionaries of global and built-in variables, the value stack, the instruction pointer and so on.
+To execute a function, Python first creates a frame for it and then executes the frame. A frame is an object that captures the state of the code object execution. It stores the code object itself as well as the values of local variables, the references to the dictionaries of global and built-in variables, the value stack, the instruction pointer and so on.
 
-A generator object stores the corresponding frame and some utility data like the generator's name and a flag telling whether the generator is currently running or not. When we call the generator's `send()` or `__next__()` method, Python executes the generator's frame just like it executes the frame of an ordinary function – it iterates over bytecode instructions one by one in the [evaluation loop]({filename}/blog/python_bts_04.md) and does whatever the instructions tell it to do. The only crucial difference is that every time we call a function, Python creates a new frame for it, while a generator keeps the same frame between the runs, thus preserving the state.
+A generator object stores the corresponding frame and some utility data like the generator's name and a flag telling whether the generator is currently running or not. The generator's `send()` method executes the generator's frame just like Python executes frames of ordinary functions – it calls `_PyEval_EvalFrameDefault()` to enter the [evaluation loop]({filename}/blog/python_bts_04.md). The evaluation loop iterates over the bytecode instructions one by one and does whatever the instructions tell it to do. The only but crucial difference between calling a function and running a generator is that every time you call the function, Python creates a new frame for it, while the generator keeps the same frame between the runs, thus preserving the state.
 
-The compiler produces a `YIELD_VALUE` instruction when it encounters a `yield` expression. As always, we can use the [`dis`](https://docs.python.org/3/library/dis.html#opcode-RETURN_VALUE) standard module to check this:
+How does Python execute `yield` expressions? Let's see. Every time the compiler encounters `yield`, it emits a `YIELD_VALUE` bytecode instruction. We can use the [`dis`](https://docs.python.org/3/library/dis.html#opcode-RETURN_VALUE) standard module to check this:
 
 ```python
 # yield.py
@@ -1018,7 +976,7 @@ def g():
     return 3
 ```
 
-```pycon
+```text
 $ python -m dis yield.py
 ...
 Disassembly of <code object g at 0x105b1c710, file "yield.py", line 3>:
@@ -1034,9 +992,9 @@ Disassembly of <code object g at 0x105b1c710, file "yield.py", line 3>:
              14 RETURN_VALUE
 ```
 
-`YIELD_VALUE` tells Python to stop executing the frame and return the value on top of the stack. It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, generator's `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
+`YIELD_VALUE` tells the evaluation loop to stop executing the frame and return the value on top of the stack (to `send()` in our case). It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
 
-When `send()` executes a frame for the first time, it doesn't actually sends the passed argument to the generator. But it ensures that the argument is `None` so that a meaningful value is never ignored:
+When `send()` executes a frame for the first time, it doesn't actually sends the provided argument to the generator. But it ensures that this argument is `None` so that a meaningful value is never ignored:
 
 ```pycon
 >>> def g():
@@ -1048,9 +1006,9 @@ Traceback (most recent call last):
 TypeError: can't send non-None value to a just-started generator
 ```
 
-On subsequent runs,  `send()` pushes the argument onto the stack. The argument is then assigned to a variable by `STORE_FAST` (or similar instruction) or just popped by `POP_TOP` if `yield` does not receive a value. If you cound't remember before whether generators first yield or recieve, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
+On subsequent runs, `send()` pushes the argument onto the stack. The argument is then assigned to a variable by `STORE_FAST` (or similar instruction) or just popped by `POP_TOP` if `yield` does not receive a value. If you cound't remember before whether generators first yield or recieve, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
 
-The compiler produces `GET_YIELD_FROM_ITER`, `LOAD_CONST` and `YIELD_FROM` instructions when it encounters a `yield from` expression:
+The compiler emits `GET_YIELD_FROM_ITER`, `LOAD_CONST` and `YIELD_FROM` instructions when it encounters `yield from`:
 
 ```python
 # yield_from.py
@@ -1071,11 +1029,11 @@ Disassembly of <code object g at 0x1051117c0, file "yield_from.py", line 3>:
 ...
 ```
 
-The job of `GET_YIELD_FROM_ITER` is to ensure that the object to yield from, which is the value on top of the stack, is an iterator. If the object is a generator, `GET_YIELD_FROM_ITER` leaves it as is. Otherwise, it replaces the object with `iter(obj)`.
+The job of `GET_YIELD_FROM_ITER` is to ensure that the object to yield from, which is the value on top of the stack, is an iterator. If the object is a generator, `GET_YIELD_FROM_ITER` leaves it as is. Otherwise, `GET_YIELD_FROM_ITER` replaces the object with `iter(obj)`.
 
-The first thing `YIELD_FROM` does is pop a value from the stack. Usually, this value is the value sended into the generator by `send()`. But on the first run, `send()` doesn't send the value, so the compiler produces a `LOAD_CONST` instruction before `YIELD_FROM` that pushes `None` onto the stack.
+The first thing `YIELD_FROM` does is pop a value from the stack. Usually, this value is a value pushed by `send()`. But `send()` pushes nothing on the first run, so the compiler emits before `YIELD_FROM` a `LOAD_CONST` instruction that pushes `None`.
 
-The second thing `YIELD_FROM` does is peek the object to yield from. If the value to send is `None`, `YIELD_FROM` calls `obj.__next__()`. Otherwise, it calls `obj.send(value)`. If the call raises a `StopIteration` exception, then `YIELD_FROM` replaces the object on top of the stack with the result and continues with the frame execution. If the call returns a value without exceptions, `YIELD_FROM` stops the frame execution and returns the value to `send()`. In the latter case, it also sets the instruction pointer in such a way so that the next execution of the frame starts with `YIELD_FROM` again. What will be different on subsequent runs is the state of the object to yield from and the value to send.
+The second thing `YIELD_FROM` does is peek the object to yield from. If the value to send is `None`, `YIELD_FROM` calls `obj.__next__()`. Otherwise, it calls `obj.send(value)`. If the call raises a `StopIteration` exception, `YIELD_FROM` replaces the object on top of the stack (i.e. the object to yield from) with the result, and the frame execution continues. If the call returns a value without exceptions, `YIELD_FROM` stops the frame execution and returns the value to `send()`. In the latter case, it also sets the instruction pointer in such a way so that the next execution of the frame starts with `YIELD_FROM` again. What will be different on the subsequent runs is the state of the object to yield from and the value to send.
 
 A native coroutine is basically a generator object that has a different type. The difference between the types is that the `generator` type implements `__iter__()` and `__next__()`, while the `coroutine` type implements `__await__()`. The implementation of `send()` is the same.
 
