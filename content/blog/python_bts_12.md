@@ -1,10 +1,13 @@
 Title: Python behind the scenes #12: how async/await works in Python
 Date: 2021-07-29 7:00
 Tags: Python behind the scenes, Python, CPython
+Summary: Mark functions as `async`. Call them with `await`. All of a sudden, your program becomes asynchronous – it can do useful things while it waits for other things, such as I/O operations, to complete.<br><br>Code written in the `async`/`await` style looks like regular synchronous code but works very differently. To understand how it works, one should be familiar with many non-trivial concepts including concurrency, parallelism, event loops, I/O multiplexing, asynchrony, cooperative multitasking and coroutines. Python's implementation of `async`/`await` adds even more concepts to this list: generators, generator-based coroutines, native coroutines, `yield` and `yield from`. Because of this complexity, many Python programmers that use `async`/`await` do not realize how it actually works. I believe that it should not be the case. The `async`/`await` pattern can be explained in a simple manner if you start from the ground up. And that's what we're going to do today.
 
 Mark functions as `async`. Call them with `await`. All of a sudden, your program becomes asynchronous – it can do useful things while it waits for other things, such as I/O operations, to complete.
 
 Code written in the `async`/`await` style looks like regular synchronous code but works very differently. To understand how it works, one should be familiar with many non-trivial concepts including concurrency, parallelism, event loops, I/O multiplexing, asynchrony, cooperative multitasking and coroutines. Python's implementation of `async`/`await` adds even more concepts to this list: generators, generator-based coroutines, native coroutines, `yield` and `yield from`. Because of this complexity, many Python programmers that use `async`/`await` do not realize how it actually works. I believe that it should not be the case. The `async`/`await` pattern can be explained in a simple manner if you start from the ground up. And that's what we're going to do today.
+
+**Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
 ## It's all about concurrency 
 
@@ -12,7 +15,7 @@ Computers execute programs sequentially – one instruction after another. But a
 
 <img src="{static}/blog/python_bts_12/concurrency.png" alt="concurrency" style="width:580px; display: block; margin: 25px auto 0 auto;" />
 
-It's crucial to understand that you can write concurrent programs without any special support from the language. Suppose you write a program that performs two tasks, each task being represented by a separate function:
+It's crucial to realize that you can write concurrent programs without any special support from the language. Suppose you write a program that performs two tasks, each task being represented by a separate function:
 
 ```python
 def do_task1():
@@ -92,11 +95,11 @@ Take time to study this code. We'll be using it as a framework for subsequent, c
 
 1. create a new TCP/IP socket with `socket.socket()`
 2. bind the socket to an address and a port with `sock.bind()`
-3. mark the socket as a "listeting" socket with `sock.listen()`
+3. mark the socket as a "listening" socket with `sock.listen()`
 4. accept new connections with `sock.accept()`
 5. read data from the client with `sock.recv()` and send the data back to the client with `sock.sendall()`.
 
-This version of server is not concurrent by design. When multiple clients try to connect to the server at about the same time, one client connects and occupies the server, while other clients wait until the current client disconnects. I wrote a simple simulation program to demonstrate this:
+This version of server is not concurrent by design. When multiple clients try to connect to the server at about the same time, one client connects and occupies the server, while other clients wait until the current client disconnects. I wrote a [simple simulation program](https://github.com/r4victor/pbts12_async_await/blob/master/clients.py) to demonstrate this:
 
 ```text
 $ python clients.py 
@@ -192,7 +195,7 @@ $ python clients.py
 
 The one-thread-per-client approach is easy to implement, but it doesn't scale well. OS threads are an expensive resource in terms of memory, so you can't have too many of them. For example, the Linux machine that serves this website is capable of running about 8k threads at most, though even fewer threads may be enough to swamp it. With this approach the server not only works poorly under heavy workloads but also becomes an easy target for a DoS attack.
 
-Thread pools solve the problem of uncontrolled thread creation. Instead of submiting each task to a separate thread, we submit tasks to a queue and let a group of threads, called a **thread pool**, take and process the tasks  from the queue. We predefine the maximum number of threads in a thread pool, so the server cannot start too many of them. Here's how we can write a thread pool version of the server using the Python standard [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html#threadpoolexecutor) module:
+Thread pools solve the problem of uncontrolled thread creation. Instead of submitting each task to a separate thread, we submit tasks to a queue and let a group of threads, called a **thread pool**, take and process the tasks  from the queue. We predefine the maximum number of threads in a thread pool, so the server cannot start too many of them. Here's how we can write a thread pool version of the server using the Python standard [`concurrent.futures`](https://docs.python.org/3/library/concurrent.futures.html#threadpoolexecutor) module:
 
 ```python
 # echo_03_thread_pool.py
@@ -234,9 +237,9 @@ The thread pool approach is both simple and practical. Note, however, that you s
 
 ## I/O multiplexing and event loops
 
-Think about the sequential server again. Such a server always waits for some specific event to happen. When it has no connected clients, it waits for a new client to connect. When it has a connected client, it waits for this client to send some data. To work concurrently, however, the server should instead be able to handle any event that happens next. If the current client doesn't send anything, but a new client connects, the server should accept the new connection. Then it should maintain multiple active connections and reply to the client that sends data next.
+Think about the sequential server again. Such a server always waits for some specific event to happen. When it has no connected clients, it waits for a new client to connect. When it has a connected client, it waits for this client to send some data. To work concurrently, however, the server should instead be able to handle any event that happens next. If the current client doesn't send anything, but a new client tries to connect, the server should accept the new connection. It should maintain multiple active connections and reply to any client that sends data next.
 
-But how can the server know what event it should handle next? By default, socket methods such as `accept()`, `recv()` and `sendall()` are all blocking. So if the server decides to call `accept()`, it will block until a new client connects and won't be not able to call `recv()` on the client sockets in the meantime. We could solve this problem by setting a timeout on blocking socket operations with `sock.settimeout(timeout)` or by turning a socket into a completely non-blocking mode with `sock.setblocking(False)`. We could then maintain a set of active sockets and, for each socket, call the correspoding socket method in an infinite loop. So, we would call `accept()` on the socket that listens for new connections and `recv()` on the sockets that wait for clients to send data.
+But how can the server know what event it should handle next? By default, socket methods such as `accept()`, `recv()` and `sendall()` are all blocking. So if the server decides to call `accept()`, it will block until a new client connects and won't be not able to call `recv()` on the client sockets in the meantime. We could solve this problem by setting a timeout on blocking socket operations with `sock.settimeout(timeout)` or by turning a socket into a completely non-blocking mode with `sock.setblocking(False)`. We could then maintain a set of active sockets and, for each socket, call the corresponding socket method in an infinite loop. So, we would call `accept()` on the socket that listens for new connections and `recv()` on the sockets that wait for clients to send data.
 
 The problem with the described approach is that it's not clear how to do the polling right. If we make all the sockets non-blocking or set timeouts too short, the server will be making calls all the time and consume a lot of CPU. Conversely, if we set timeouts too long, the server will be slow to reply.
 
@@ -267,11 +270,11 @@ This call returns a list of `(key, events)` tuples. Each tuple describes a ready
 * `key` is an object that stores the socket (`key.fileobj`) and the auxiliary data associated with the socket (`key.data`).
 * `events` is a bitmask of events ready on the socket (`selectors.EVENT_READ` or `selectors.EVENT_WRITE` or both).
 
-If there are ready sockets when you call `select()`, then `select()` returns immideatly. Otherwise, it blocks until some of the registered sockets become ready. The OS will notify `select()` as it notifies blocking socket methods like `recv()`.
+If there are ready sockets when you call `select()`, then `select()` returns immediately. Otherwise, it blocks until some of the registered sockets become ready. The OS will notify `select()` as it notifies blocking socket methods like `recv()`.
 
 When you no longer need to monitor some socket, you just pass it to the selector's [`unregister()`](https://docs.python.org/3/library/selectors.html#selectors.BaseSelector.unregister) method.
 
-One question remains. What should we do with a ready socket? We certainly had some idea of what do to with it when we registered it, so let's register every socket with a callback that should be called when the socket becomes ready. That's, by the way, what the auxially data parameter of the selector's `register()` method is for. 
+One question remains. What should we do with a ready socket? We certainly had some idea of what do to with it when we registered it, so let's register every socket with a callback that should be called when the socket becomes ready. That's, by the way, what the auxiliary data parameter of the selector's `register()` method is for. 
 
 We're now ready to implement a single-threaded concurrent version of the server using I/O multiplexing:
 
@@ -323,7 +326,7 @@ if __name__ == '__main__':
     run_event_loop()
 ```
 
-Here we first register an `accept()` callback on the listening socket. This callback accepts new clients and registers a `recv_and_send()` callback on every client socket. The core of the program is the **event loop** – an infinite loop that, on every iteration, selects ready sockets and calls the corresponding registered callbacks.
+Here we first register an `accept()` callback on the listening socket. This callback accepts new clients and registers a `recv_and_send()` callback on every client socket. The core of the program is the **event loop** – an infinite loop that on each iteration selects ready sockets and calls the corresponding registered callbacks.
 
 The event loop version of the server handles multiple clients perfectly fine. Its main disadvantage compared to the multi-threaded versions is that the code is structured in a weird, callback-centered way. The code in our example doesn't look so bad, but this is in part because we do not handle all the things properly. For example, writing to a socket may block if the write queue is full, so we should also check whether the socket is ready for writing before calling `sock.sendall()`. This means that the `recv_and_send()` function must be decomposed into two functions, and one of these functions must be registered as a callback at any given time depending on the server's state. The problem would be even more apparent if implemented something more complex than the primitive echo protocol.
 
@@ -385,7 +388,7 @@ If the generator returns something, the exception holds the returned value:
 3
 ```
 
-Initially generators were introduced to Python as an alternative way to write iterators. Recall that in Python an object that can be iterated over (as with a `for` loop) is called an **iterable**. An iterable implements the [`__iter__()`](https://docs.python.org/3/reference/datamodel.html#object.__iter__) special method that returns an **iterator**. An iterator, in turn, implements [`__next__()`](https://docs.python.org/3/library/stdtypes.html#iterator.__next__) that returns the next value every time you call it. You can get the values by calling `next()` but you typically iterate over them with a `for` loop:
+Initially generators were introduced to Python as an alternative way to write iterators. Recall that in Python an object that can be iterated over (as with a `for` loop) is called an **iterable**. An iterable implements the [`__iter__()`](https://docs.python.org/3/reference/datamodel.html#object.__iter__) special method that returns an **iterator**. An iterator, in turn, implements [`__next__()`](https://docs.python.org/3/library/stdtypes.html#iterator.__next__) that returns the next value every time you call it. You can get the values by calling `next()`, but you typically iterate over them with a `for` loop:
 
 ```pycon
 >>> for i in gen():
@@ -399,7 +402,7 @@ Iterators can be iterated over because they are iterables too. Every iterator im
 
 Generators allowed us to write iterators as functions that `yield` values instead of defining classes with special methods. Python fills the special methods for us so that generators become iterators automatically.
 
-Generators produce values in a lazy, on-demand manner, so they are memory-efficient and can even be used to generate infinite sequences. See [PEP 255](https://www.python.org/dev/peps/pep-0255/) to learn more about such uses cases. We, however, want to use generators for a completely different reason. What's important for us is not the values that a generator produces but the mere fact that it can be suspended and resumed.
+Generators produce values in a lazy, on-demand manner, so they are memory-efficient and can even be used to generate infinite sequences. See [PEP 255](https://www.python.org/dev/peps/pep-0255/) to learn more about such uses cases. We want to use generators for a completely different reason, though. What's important for us is not the values that a generator produces but the fact that it can be suspended and resumed.
 
 ## Generators as coroutines
 
@@ -407,7 +410,7 @@ Take any program that performs multiple tasks. Turn functions that represent the
 
 <img src="{static}/blog/python_bts_12/generators.png" alt="generators" style="width:580px; display: block; margin: 25px auto;" />
 
-Let's apply this strategy to the sequential server to make it concurrent. First, we need to insert some `yield` statements. I suggest to insert them before every blocking operation. Then, we need to run generators. I suggest to write a class that does this. The class should provide the `create_task()` method that adds a generator to a queue of scheduled generators (or simply tasks) and the `run()` method that runs the tasks in a loop in a round-robin fashion. We'll call this class `EventLoopNoIO` since it functions like an event loop except that it doesn't do I/O multiplexing. Here's the server code:
+Let's apply this strategy to the sequential server to make it concurrent. First we need to insert some `yield` statements. I suggest to insert them before every blocking operation. Then we need to run generators. I suggest to write a class that does this. The class should provide the `create_task()` method that adds a generator to a queue of scheduled generators (or simply tasks) and the `run()` method that runs the tasks in a loop in a round-robin fashion. We'll call this class `EventLoopNoIO` since it functions like an event loop except that it doesn't do I/O multiplexing. Here's the server code:
 
 ```python
 # echo_05_yield_no_io.py
@@ -477,7 +480,7 @@ class EventLoopNoIO:
 
 This counts as a concurrent server. You may notice, however, that it has a problem.  Its concurrency is very limited. The tasks run in an interleaved manner, but their order is fixed. For example, if the currently scheduled task is the task that accepts new connections, tasks that handle connected clients have to wait until a new client connects.
 
-Another way to phrase this problem is to say that the event loop doesn't check whether socket operations will block. As we learned, we can fix it by adding I/O multiplexing. Instead of rescheduling a task immediately after running it, the event loop should reschedule the task only when the socket that the task is waiting on becomes available for reading (or writing). A task can register its intention to read from or write to a socket by calling some event loop method. Or it can just `yield` this information to the event loop. Here's a version of the server that takes the latter approach:
+Another way to phrase this problem is to say that the event loop doesn't check whether socket operations will block. As we've learned, we can fix it by adding I/O multiplexing. Instead of rescheduling a task immediately after running it, the event loop should reschedule the task only when the socket that the task is waiting on becomes available for reading (or writing). A task can register its intention to read from or write to a socket by calling some event loop method. Or it can just `yield` this information to the event loop. Here's a version of the server that takes the latter approach:
 
 ```python
 # echo_06_yield_io.py
@@ -590,7 +593,7 @@ $ python clients.py
 
 Second, we get the code that looks like regular sequential code. Of course, we had to write the event loop, but this is not something you typically do yourself. Event loops come with libraries, and in Python you're most likely to use an event loop that comes with [`asyncio`](https://docs.python.org/3/library/asyncio.html).
 
-When you use generators for multitasking, as we did in this section, you typically refer to them as coroutines. **Coroutines** are functions that can be supsended by explicitly yielding the control. So, according to this definition, simple generators with `yield` expressions can be counted as coroutines. A true coroutine, however, should also be able to yield the control to other coroutines by calling them, but generators can yield the control only to the caller.
+When you use generators for multitasking, as we did in this section, you typically refer to them as coroutines. **Coroutines** are functions that can be suspended by explicitly yielding the control. So, according to this definition, simple generators with `yield` expressions can be counted as coroutines. A true coroutine, however, should also be able to yield the control to other coroutines by calling them, but generators can yield the control only to the caller.
 
 We'll see why we need true coroutines if try to factor out some generator's code into a subgenerator. Consider these two lines of code of the `handle_client()` generator:
 
@@ -636,11 +639,11 @@ Traceback (most recent call last):
 StopIteration
 ```
 
-In fact, the generator's `__next__()` method became simply a shorthand for `send(None)`.
+The generator's `__next__()` method became simply a shorthand for `send(None)`.
 
 Generators also got the [`throw()`](https://docs.python.org/3/reference/expressions.html#generator.throw) method that runs the generator like `send()` or `__next__()` but also raises a specified exception at the suspension point and the [`close()`](https://docs.python.org/3/reference/expressions.html#generator.close) method that raises a [`GeneratorExit`](https://docs.python.org/3/library/exceptions.html#GeneratorExit) exception.
 
-Here's how this enhancement solved the subgenerator issue. Instead of running a subgenerator inplace, a generator could now `yield` it to the event loop, and the event loop would run the subgenerator and then `send()` the result back to the generator (or throw an exception into the generator if the subgenerator raised one). The generator would call the subgenerator like this:
+Here's how this enhancement solved the subgenerator issue. Instead of running a subgenerator in place, a generator could now `yield` it to the event loop, and the event loop would run the subgenerator and then `send()` the result back to the generator (or throw an exception into the generator if the subgenerator raised one). The generator would call the subgenerator like this:
 
 ```python
 recieved_data = yield async_recv(sock)
@@ -665,13 +668,13 @@ for i in iterable:
     yield i
 ```
 
-But `yield from` does much more when you use it with generators. It does exactly what a generator has to do to run a subgenerator inplace, and that's why we're discussing it. The main steps of `yield from` are:
+But `yield from` does much more when you use it with generators. It does exactly what a generator has to do to run a subgenerator in place, and that's why we're discussing it. The main steps of `yield from` are:
 
 1. Run the subgenerator once with `send(None)`. If `send()` raises a `StopIteration` exception, catch the exception, extract the result, make it a value of the `yield from` expression and stop.
-2. If subgenerator's `send()` returns a value without exceptions, `yield` it and recieve a value sended to the generator.
-3. When recieved the value, repeat step 1 but this time `send()` the received value.
+2. If subgenerator's `send()` returns a value without exceptions, `yield` the value and receive a value sent to the generator.
+3. When received a value, repeat step 1 but this time `send()` the received value.
 
-This algorithm requires some elaboration. First, `yield from` automatically propagates exceptions thrown by calling the generator's `throw()` and `close()` methods into the subgenerator. The implementation of these methods ensures this. Second, `yield from` applies the same algorithm to non-generator iterables except that it gets an iterator with `iter(iterable)` and then uses `next()` instead `send()` to run the iterator.
+This algorithm requires some elaboration. First, `yield from` automatically propagates exceptions thrown by calling the generator's `throw()` and `close()` methods into the subgenerator. The implementation of these methods ensures this. Second, `yield from` applies the same algorithm to non-generator iterables except that it gets an iterator with `iter(iterable)` and then uses `__next__()` instead `send()` to run the iterator.
 
 Here's how you can remember what `yield from` does: it makes the subgenerator work as if the subgenerator's code were a part of the generator. So this `yield from` call:
 
@@ -679,7 +682,7 @@ Here's how you can remember what `yield from` does: it makes the subgenerator wo
 recieved_data = yield from async_recv(sock)
 ```
 
-works as if the call were replaced with the code of `async_recv()`. That's also counts as a coroutine call, and in contrast to the previous `yield`-based solution, the event loop logic stays the same.
+works as if the call were replaced with the code of `async_recv()`. This also counts as a coroutine call, and in contrast to the previous `yield`-based solution, the event loop logic stays the same.
 
 Let's now take advantage of `yield from` to make the server's code more concise. First, we factor out every boilerplate `yield` statement and the following socket operation to a separate generator function. We put these functions in the event loop:
 
@@ -737,13 +740,14 @@ class EventLoopYieldFrom:
 Then we `yield from` the generators in the server's code:
 
 ```python
-from collections import deque
+# echo_07_yield_from.py
+
 import socket
 
-from event_loop import EventLoop
+from event_loop_03_yield_from import EventLoopYieldFrom
 
 
-loop = EventLoop()
+loop = EventLoopYieldFrom()
 
 
 def run_sever(host='127.0.0.1', port=55555):
@@ -757,7 +761,7 @@ def run_sever(host='127.0.0.1', port=55555):
         loop.create_task(handle_client(client_sock))
 
 
-def handle_client(sock: socket.socket):
+def handle_client(sock):
     while True:
         recieved_data = yield from loop.sock_recv(sock, 4096)
         if not recieved_data:
@@ -773,11 +777,11 @@ if __name__ == '__main__':
     loop.run()
 ```
 
-And that's it! Generators, `yield` and `yield from` are all we need to implement coroutines, and coroutines allow us to write asynchronous, concurrent code that looks like regular sequential code. What about `async`/`await`? Well, it's just a synactic feature on top of generators that was introduced to Python to fix the generators' ambiguity.
+And that's it! Generators, `yield` and `yield from` are all we need to implement coroutines, and coroutines allow us to write asynchronous, concurrent code that looks like regular sequential code. What about `async`/`await`? Well, it's just a syntactic feature on top of generators that was introduced to Python to fix the generators' ambiguity.
 
 ## async/await
 
-When you see a generator function, you cannot always say immediately whether it's intended to be used as a regular generator or as a coroutine. In both cases, the function looks like any other function defined with `def` and contains a bunch of `yield` and `yield from` expressions. So, to make coroutines a distinct concept, [PEP 492](https://www.python.org/dev/peps/pep-0492/) introduced the `async` and `await` keywords in Python 3.5.
+When you see a generator function, you cannot always say immediately whether it's intended to be used as a regular generator or as a coroutine. In both cases, the function looks like any other function defined with `def` and contains a bunch of `yield` and `yield from` expressions. So to make coroutines a distinct concept, [PEP 492](https://www.python.org/dev/peps/pep-0492/) introduced the `async` and `await` keywords in Python 3.5.
 
 You define a **native coroutine** **function** using the `async def` syntax:
 
@@ -854,7 +858,7 @@ As a second option, we can make any object awaitable by defining the [`__await__
 4
 ```
 
-Let's now write the final version of the server using `async`/`await`. First, we mark the server's functions as `async` and change `yield from` calls to `await` calls:
+Let's now write the final version of the server using `async`/`await`. First we mark the server's functions as `async` and change `yield from` calls to `await` calls:
 
 ```python
 # echo_08_async_await.py
@@ -963,7 +967,7 @@ A generator function is an ordinary function whose code object has a `CO_GENERAT
 
 To execute a function, Python first creates a frame for it and then executes the frame. A frame is an object that captures the state of the code object execution. It stores the code object itself as well as the values of local variables, the references to the dictionaries of global and built-in variables, the value stack, the instruction pointer and so on.
 
-A generator object stores the corresponding frame and some utility data like the generator's name and a flag telling whether the generator is currently running or not. The generator's `send()` method executes the generator's frame just like Python executes frames of ordinary functions – it calls `_PyEval_EvalFrameDefault()` to enter the [evaluation loop]({filename}/blog/python_bts_04.md). The evaluation loop iterates over the bytecode instructions one by one and does whatever the instructions tell it to do. The only but crucial difference between calling a function and running a generator is that every time you call the function, Python creates a new frame for it, while the generator keeps the same frame between the runs, thus preserving the state.
+A generator object stores the frame created for the generator function and some utility data like the generator's name and a flag telling whether the generator is currently running or not. The generator's `send()` method executes the generator's frame just like Python executes frames of ordinary functions – it calls `_PyEval_EvalFrameDefault()` to enter the [evaluation loop]({filename}/blog/python_bts_04.md). The evaluation loop iterates over the bytecode instructions one by one and does whatever the instructions tell it to do. The only but crucial difference between calling a function and running a generator is that every time you call the function, Python creates a new frame for it, while the generator keeps the same frame between the runs, thus preserving the state.
 
 How does Python execute `yield` expressions? Let's see. Every time the compiler encounters `yield`, it emits a `YIELD_VALUE` bytecode instruction. We can use the [`dis`](https://docs.python.org/3/library/dis.html#opcode-RETURN_VALUE) standard module to check this:
 
@@ -994,7 +998,7 @@ Disassembly of <code object g at 0x105b1c710, file "yield.py", line 3>:
 
 `YIELD_VALUE` tells the evaluation loop to stop executing the frame and return the value on top of the stack (to `send()` in our case). It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
 
-When `send()` executes a frame for the first time, it doesn't actually sends the provided argument to the generator. But it ensures that this argument is `None` so that a meaningful value is never ignored:
+When `send()` executes a frame for the first time, it doesn't actually sends the provided argument to the generator. But it ensures that the argument is `None` so that a meaningful value is never ignored:
 
 ```pycon
 >>> def g():
@@ -1006,7 +1010,7 @@ Traceback (most recent call last):
 TypeError: can't send non-None value to a just-started generator
 ```
 
-On subsequent runs, `send()` pushes the argument onto the stack. The argument is then assigned to a variable by `STORE_FAST` (or similar instruction) or just popped by `POP_TOP` if `yield` does not receive a value. If you cound't remember before whether generators first yield or recieve, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
+On subsequent runs, `send()` pushes the argument onto the stack. The argument is then assigned to a variable by `STORE_FAST` (or similar instruction) or just popped by `POP_TOP` if `yield` does not receive a value. If you couldn't remember before whether generators first yield or receive, you should remember now: first `YIELD_VALUE`, then `STORE_FAST`.
 
 The compiler emits `GET_YIELD_FROM_ITER`, `LOAD_CONST` and `YIELD_FROM` instructions when it encounters `yield from`:
 
@@ -1062,13 +1066,13 @@ Disassembly of <code object coro at 0x10d96e7c0, file "await.py", line 3>:
 
 That's basically how generators and coroutines work. If you still have questions left, I recommend you study the CPython source code. See [`Include/cpython/code.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/code.h) for the code object definition, [`Include/funcobject.h`](https://github.com/python/cpython/blob/3.9/Include/funcobject.h) for the function object definition and [`Include/cpython/frameobject.h`](https://github.com/python/cpython/blob/3.9/Include/cpython/frameobject.h) for the frame definition. Look at [`Objects/genobject.c`](https://github.com/python/cpython/blob/3.9/Objects/genobject.c) to learn more about generators and coroutines, and look at [`Python/ceval.c`](https://github.com/python/cpython/blob/3.9/Python/ceval.c) to learn what different bytecode instructions do.
 
-We've figured out how `async`/`await` works, but we also need an event loop to run `async`/`await` programs. You're unlikely to write your own event loops as we did in this post because that's a lot work. What you usually do instead is use some event loop library. So before we colculde this post, let me say a few words about the library you're most likely to use.
+We've figured out how `async`/`await` works, but we also need an event loop to run `async`/`await` programs. You're unlikely to write your own event loops as we did in this post because that's a lot work. What you usually do instead is use some event loop library. So before we conclude this post, let me say a few words about the library you're most likely to use.
 
 ## asyncio
 
 [`asyncio`](https://docs.python.org/3/library/asyncio.html) came to the Python standard library around the same time `async`/`await` was introduced (see [PEP 3156](https://www.python.org/dev/peps/pep-3156/)). It does a lot of things, but essentially it provides an event loop and a bunch of classes, functions and coroutines for asynchronous programming. 
 
-The `asyncio` event loop provides an interface similiar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop iterpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then started monitoring the socket with a selector and rescheduled the coroutine when the event happened.
+The `asyncio` event loop provides an interface similar to that of our final `EventLoopAsyncAwait` but works a bit differently. Recall that our event loop maintained a queue of scheduled coroutines and ran them by calling `send(None)`. When a coroutine yielded a value, the event loop interpreted the value as an `(event, socket)` message telling that the coroutine waits for `event` on `socket`. The event loop then started monitoring the socket with a selector and rescheduled the coroutine when the event happened.
 
 The `asyncio` event loop is different in that it does not maintain a queue of scheduled coroutines but only schedules and invokes callbacks. Nevertheless, it provides [`loop.create_task()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_task) and other methods to schedule and run coroutines. How does it do that? Let's see.
 
@@ -1090,13 +1094,13 @@ The [`loop._run_once()`](https://github.com/python/cpython/blob/b2f68b1900355408
 
 So, how does this callback-based event loop run coroutines? Let's take a look at the `loop.create_task()` method. To schedule a coroutine, it wraps the coroutine in a [`Task`](https://docs.python.org/3/library/asyncio-task.html#asyncio.Task) instance. The `Task.__init__()` method schedules `task.__step()` as a callback by calling `loop.call_soon()`. And this is the trick: `task.__step()` runs the coroutine.
 
-The [`task.__step()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/tasks.py#L215) method runs the coroutine once by calling `coro.send(None)`. The coroutine doesn't yield messages. It can yield either `None` or a `Future` instance. `None` means that the coroutine simply wants to yield the control. This is what `asyncio.sleep(0)` does, for example. In this case, `task.__step()` reschedules itself.
+The [`task.__step()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/tasks.py#L215) method runs the coroutine once by calling `coro.send(None)`. The coroutine doesn't yield messages. It can yield either `None` or a `Future` instance. `None` means that the coroutine simply wants to yield the control. This is what `asyncio.sleep(0)` does, for example. If a coroutine yields `None`, `task.__step()` simply reschedules itself.
 
 A [`Future`](https://docs.python.org/3/library/asyncio-future.html#asyncio.Future) instance represents the result of some operation that may not be available yet. When a coroutine yields a future, it basically tells the event loop: "I'm waiting for this result. It may not be available yet, so I'm yielding the control. Wake me up when the result becomes available".
 
 What does `task.__step()` do with a future? It calls `future.add_done_callback()` to add to the future a callback that reschedules `task.__step()`. If the result is already available, the callback is invoked immediately. Otherwise, it's invoked when someone/something sets the result by calling `future.set_result()`.
 
-Native coroutines cannot `yield`. Does it mean that we have to write a generator-based coroutine any time we need to `yield` a future? No. A native coroutine can simply `await` on futures, like so:
+Native coroutines cannot `yield`. Does it mean that we have to write a generator-based coroutine any time we need to `yield` a future? No. Native coroutine can simply `await` on futures, like so:
 
 ```python
 async def future_waiter():
@@ -1118,7 +1122,7 @@ class Future:
         return self.result()  # May raise too.
 ```
 
-What sets the result on a future? Let's take a function that returns a future for the socket incoming data as an example. Such a function can be implemented as follows:
+What sets the result on a future? Let's take a function that creates a future for the socket incoming data as an example. Such a function can be implemented as follows:
 
 1. Create a new `Future` instance.
 2. Call `loop.add_reader()` to register a callback for the socket. The callback should read data from the socket and set the data as the future's result.
@@ -1143,17 +1147,26 @@ async def coro():
 
 `Task` subclasses `Future` so that tasks can be awaited on. What sets the result on a task? It's `task.__step()`. If `coro.send(None)` raises a `StopIteration` exception, `task.__step()` handles the exception and sets the task's result.
 
-And that's basically how the core of `asyncio` works. There two facts about it that we should remember. First, the event loop is based on callbacks, and the coroutines support is implemented on top of that. Second, coroutines do not yield messages to the event loop but yield futures. Futures allow coroutines to wait for different things, not only for I/O events. For example, a coroutine may submit a long-running computation to a separate thread and `await` on a future that represents the result of the computation. We could implement such a coroutine on top of sockets, but it would be less elegant and general than the solution with a future.
+And that's basically how the core of `asyncio` works. There two facts about it that we should remember. First, the event loop is based on callbacks, and the coroutine support is implemented on top of that. Second, coroutines do not yield messages to the event loop but yield futures. Futures allow coroutines to wait for different things, not only for I/O events. For example, a coroutine may submit a long-running computation to a separate thread and `await` on a future that represents the result of the computation. We [could](https://github.com/r4victor/pbts12_async_await/blob/master/event_loop_05_thread.py) implement such a coroutine on top of sockets, but it would be less elegant and general than the solution with a future.
 
 ## Conclusion
 
-The `async`/`await` pattern has gained popularity in recent years. Concurrency is as relevant today as ever, and traditional approaches for achieving it, such as OS threads and callbacks, cannot always provide an adequate solution. OS threads work fine in some cases, but in many other cases the concurrency can be implemented much better at the language/application level. A callback-based event loop is techically as good as any `async`/`await` solution, but who likes writing callbacks?
+The `async`/`await` pattern has gained popularity in recent years. Concurrency is as relevant today as ever, and traditional approaches for achieving it, such as OS threads and callbacks, cannot always provide an adequate solution. OS threads work fine in some cases, but in many other cases the concurrency can be implemented much better at the language/application level. A callback-based event loop is technically as good as any `async`/`await` solution, but who likes writing callbacks?
 
 It's not to say that `async`/`await` is the only right approach to concurrency. Many find other approaches to be better. Take the [communicating sequential processes model](https://en.wikipedia.org/wiki/Communicating_sequential_processes) implemented in [Go](https://golang.org/doc/effective_go#concurrency) and [Clojure](https://clojuredocs.org/clojure.core.async) or the [actor model](https://en.wikipedia.org/wiki/Actor_model) implemented in [Erlang](https://erlang.org/doc/getting_started/conc_prog.html) and [Akka](https://doc.akka.io/docs/akka/current/typed/guide/introduction.html) as examples. Still, `async`/`await` seems to be the best model we have in Python today.
 
-Python didn't invent `async`/`await`. You can also find it in [C#](https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/async/), [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function), [Rust](https://rust-lang.github.io/async-book/01_getting_started/01_chapter.html), and [Swift](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html), to name a few. I'm biased towards Python's implementation because I understand it best, but objectely, it's not the most refined. It mixes generators, generator-based coroutines, native coroutines, `yield from` and `await`, which makes it harder to understand. Nevertheless, once you understand these concepts, Python's `async`/`await` seems pretty straightforward.
+Python didn't invent `async`/`await`. You can also find it in [C#](https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/async/), [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function), [Rust](https://rust-lang.github.io/async-book/01_getting_started/01_chapter.html), and [Swift](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html), to name a few. I'm biased towards Python's implementation because I understand it best, but objectively, it's not the most refined. It mixes generators, generator-based coroutines, native coroutines, `yield from` and `await`, which makes it harder to understand. Nevertheless, once you understand these concepts, Python's `async`/`await` seems pretty straightforward.
 
 `asyncio` is a solid library, but it has its issues. The callback-based event loop allows `asyncio` to provide an API for both callback-style and `async`/`await`-style programming. But an event-loop that runs coroutines directly, like those that we wrote in this post, [can be much simpler](https://vorpus.org/blog/some-thoughts-on-asynchronous-api-design-in-a-post-asyncawait-world/#other-challenges-for-hybrid-apis) in both implementation and usage. The [`curio`](https://github.com/dabeaz/curio) and [`trio`](https://github.com/python-trio/trio) modules are notable alternatives to `asyncio` that take this approach.
 
-To sum up, concurrecy is inherently hard, and no programming model can make it easy. Some models make it manageable, though, and this post should help you master one such model – Python's `async`/`await`.
+To sum up, concurrency is inherently hard, and no programming model can make it easy. Some models make it manageable, though, and this post should help you master one such model – Python's `async`/`await`.
 
+## P.S.
+
+The code for this post is available on [github](https://github.com/r4victor/pbts12_async_await). The post is inspired by David Beazley's [Curious Course on Coroutines and Concurrency](https://www.youtube.com/watch?v=Z_OAlIhXziw) talk and by Eli Bendersky's [Concurrent Servers](https://eli.thegreenplace.net/2017/concurrent-servers-part-1-introduction/) series.
+
+`async`/`await` completes the list of topics I wanted to cover in the Python behind the scenes series. I'm now planning to write about other interesting things, but the series is likely to get a sequel in the future. If you want to suggest a topic for the next post, you can write me an email to victor@tenthousandmeters.com.
+
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
