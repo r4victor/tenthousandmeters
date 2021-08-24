@@ -1,5 +1,5 @@
 Title: Python behind the scenes #12: how async/await works in Python
-Date: 2021-07-29 7:00
+Date: 2021-08-24 3:30
 Tags: Python behind the scenes, Python, CPython
 Summary: Mark functions as `async`. Call them with `await`. All of a sudden, your program becomes asynchronous – it can do useful things while it waits for other things, such as I/O operations, to complete.<br><br>Code written in the `async`/`await` style looks like regular synchronous code but works very differently. To understand how it works, one should be familiar with many non-trivial concepts including concurrency, parallelism, event loops, I/O multiplexing, asynchrony, cooperative multitasking and coroutines. Python's implementation of `async`/`await` adds even more concepts to this list: generators, generator-based coroutines, native coroutines, `yield` and `yield from`. Because of this complexity, many Python programmers that use `async`/`await` do not realize how it actually works. I believe that it should not be the case. The `async`/`await` pattern can be explained in a simple manner if you start from the ground up. And that's what we're going to do today.
 
