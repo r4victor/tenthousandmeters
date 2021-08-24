@@ -985,7 +985,7 @@ Meta path finders, path entry finders, path hooks, path entries and loaders make
 
 What's about `sys.path`? It's crucial to understand what's there when you import a module, yet I couldn't find a satisfactory explanation in the docs. Perhaps, it's too complicated to describe precisely. But I think that the approximation like the one we gave in the previous section is good enough for practical purposes.
 
-Overall, studying the import system was useful, but I think that the next time we should study something more exciting. How about async/await?
+Overall, studying the import system was useful, but I think that [the next time]({filename}/blog/python_bts_12.md) we should study something more exciting. How about async/await?
 
 <br>
 
