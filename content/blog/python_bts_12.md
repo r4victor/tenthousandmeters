@@ -53,7 +53,7 @@ def main():
 
 Of course, this is an oversimplified example. The point here is that the language doesn't determine whether you can write concurrent programs or not but may provide features that make concurrent programming more convenient. As we'll learn today, `async`/`await` is just such a feature.
 
-To see how one goes from concurrency to  `async`/`await`, we'll write a real-world concurrent program – a TCP echo server that supposed to handle multiple clients simultaneously. We'll start with the simplest, sequential version of the server that is not concurrent. Then we'll make it concurrent using OS threads. After that, we'll see how we can write a concurrent version that runs in a single thread using I/O multiplexing and event loops. From this point onwards, we'll develop the single-threaded approach by introducing generators, coroutines and, finally, `async`/`await`.
+To see how one goes from concurrency to  `async`/`await`, we'll write a real-world concurrent program – a TCP echo server that supposed to handle multiple clients simultaneously. We'll start with the simplest, sequential version of the server that is not concurrent. Then we'll make it concurrent using OS threads. After that, we'll see how we can write a concurrent version that runs in a single thread using I/O multiplexing and an event loop. From this point onwards, we'll develop the single-threaded approach by introducing generators, coroutines and, finally, `async`/`await`.
 
 ## A sequential server
 
@@ -639,7 +639,7 @@ Traceback (most recent call last):
 StopIteration
 ```
 
-The generator's `__next__()` method became simply a shorthand for `send(None)`.
+The generators' `__next__()` method became simply a shorthand for `send(None)`.
 
 Generators also got the [`throw()`](https://docs.python.org/3/reference/expressions.html#generator.throw) method that runs the generator like `send()` or `__next__()` but also raises a specified exception at the suspension point and the [`close()`](https://docs.python.org/3/reference/expressions.html#generator.close) method that raises a [`GeneratorExit`](https://docs.python.org/3/library/exceptions.html#GeneratorExit) exception.
 
@@ -684,7 +684,7 @@ recieved_data = yield from async_recv(sock)
 
 works as if the call were replaced with the code of `async_recv()`. This also counts as a coroutine call, and in contrast to the previous `yield`-based solution, the event loop logic stays the same.
 
-Let's now take advantage of `yield from` to make the server's code more concise. First, we factor out every boilerplate `yield` statement and the following socket operation to a separate generator function. We put these functions in the event loop:
+Let's now take advantage of `yield from` to make the server's code more concise. First we factor out every boilerplate `yield` statement and the following socket operation to a separate generator function. We put these functions in the event loop:
 
 ```python
 # event_loop_03_yield_from.py
@@ -996,7 +996,7 @@ Disassembly of <code object g at 0x105b1c710, file "yield.py", line 3>:
              14 RETURN_VALUE
 ```
 
-`YIELD_VALUE` tells the evaluation loop to stop executing the frame and return the value on top of the stack (to `send()` in our case). It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the stack, while `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
+`YIELD_VALUE` tells the evaluation loop to stop executing the frame and return the value on top of the stack (to `send()` in our case). It works like a `RETURN_VALUE` instruction produced for a `return` statement with one exception. It sets the `f_stacktop` field of the frame to the top of the stack, whereas `RETURN_VALUE` leaves `f_stacktop` set to `NULL`. By this mechanism, `send()` understands whether the generator yielded or returned the value. In the first case, `send()` simply returns the value. In the second case, it raises a `StopIteration` exception that contains the value.
 
 When `send()` executes a frame for the first time, it doesn't actually sends the provided argument to the generator. But it ensures that the argument is `None` so that a meaningful value is never ignored:
 
@@ -1092,7 +1092,7 @@ The [`loop._run_once()`](https://github.com/python/cpython/blob/b2f68b1900355408
 3. Move callbacks whose time has come from `loop._scheduled` to `loop._ready`.
 4. Pop callbacks from `loop._ready` and invoke those that are not cancelled.
 
-So, how does this callback-based event loop run coroutines? Let's take a look at the `loop.create_task()` method. To schedule a coroutine, it wraps the coroutine in a [`Task`](https://docs.python.org/3/library/asyncio-task.html#asyncio.Task) instance. The `Task.__init__()` method schedules `task.__step()` as a callback by calling `loop.call_soon()`. And this is the trick: `task.__step()` runs the coroutine.
+So, how does this callback-based event loop run coroutines? Let's take a look at the [`loop.create_task()`](https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.create_task) method. To schedule a coroutine, it wraps the coroutine in a [`Task`](https://docs.python.org/3/library/asyncio-task.html#asyncio.Task) instance. The `Task.__init__()` method schedules `task.__step()` as a callback by calling `loop.call_soon()`. And this is the trick: `task.__step()` runs the coroutine.
 
 The [`task.__step()`](https://github.com/python/cpython/blob/b2f68b190035540872072ac1d2349e7745e85596/Lib/asyncio/tasks.py#L215) method runs the coroutine once by calling `coro.send(None)`. The coroutine doesn't yield messages. It can yield either `None` or a `Future` instance. `None` means that the coroutine simply wants to yield the control. This is what `asyncio.sleep(0)` does, for example. If a coroutine yields `None`, `task.__step()` simply reschedules itself.
 
@@ -1100,7 +1100,7 @@ A [`Future`](https://docs.python.org/3/library/asyncio-future.html#asyncio.Futur
 
 What does `task.__step()` do with a future? It calls `future.add_done_callback()` to add to the future a callback that reschedules `task.__step()`. If the result is already available, the callback is invoked immediately. Otherwise, it's invoked when someone/something sets the result by calling `future.set_result()`.
 
-Native coroutines cannot `yield`. Does it mean that we have to write a generator-based coroutine any time we need to `yield` a future? No. Native coroutine can simply `await` on futures, like so:
+Native coroutines cannot `yield`. Does it mean that we have to write a generator-based coroutine any time we need to `yield` a future? No. Native coroutines can simply `await` on futures, like so:
 
 ```python
 async def future_waiter():
@@ -1128,7 +1128,7 @@ What sets the result on a future? Let's take a function that creates a future fo
 2. Call `loop.add_reader()` to register a callback for the socket. The callback should read data from the socket and set the data as the future's result.
 3. Return the future to the caller.
 
-If the caller is a task that awaits on the future, it will yield the future to `task.__step()`. The `task.__step()` method will add a callback to the future, and this callback will reschedule the task when the callback from step 2 sets the result.
+When a task awaits on this future, it will yield the future to `task.__step()`. The `task.__step()` method will add a callback to the future, and this callback will reschedule the task when the callback from step 2 sets the result.
 
 We know that a coroutine can wait for the result of another coroutine by awaiting on that coroutine:
 
