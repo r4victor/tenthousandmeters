@@ -5,7 +5,7 @@ Summary: Have you ever wondered what `python` does when you run one of your prog
          ```
          $ python script.py
          ```
-         This article opens a series which seeks to answer this very question.
+​         This article opens a series which seeks to answer this very question.
 
 ## Introduction
 
@@ -312,5 +312,5 @@ We haven't covered a lot of things. We avoided digging into the source code. The
 
 <br>
 
-**Update from 4 September 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals.
+**Update from September 4, 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals.
 

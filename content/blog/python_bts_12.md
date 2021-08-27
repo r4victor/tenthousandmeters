@@ -11,7 +11,7 @@ Code written in the `async`/`await` style looks like regular synchronous code bu
 
 ## It's all about concurrency 
 
-Computers execute programs sequentially – one instruction after another. But a typical program performs multiple tasks, and it doesn't always make sense to wait for some task to complete before starting the next one. For example, a chess program that waits for a player to make a move should be able to update the clock in the meantime. Such an ability of a program to deal with multiple things simultaneously is what we call **concurrency**. Concurrency doesn't mean that multiple tasks must run at the same physical time. They can run in an interleaved manner: a task runs for some time, then suspends and lets other tasks run, hoping it will get more time in the future. By this mechanism, an OS can run thousands of processes on a machine that has only a few cores. If multiple tasks do run at the same physical time, as in the case of a multi-core machine or a cluster, then we have **parallelism**, a special case of concurrency.
+Computers execute programs sequentially – one instruction after another. But a typical program performs multiple tasks, and it doesn't always make sense to wait for some task to complete before starting the next one. For example, a chess program that waits for a player to make a move should be able to update the clock in the meantime. Such an ability of a program to deal with multiple things simultaneously is what we call **concurrency**. Concurrency doesn't mean that multiple tasks must run at the same physical time. They can run in an interleaved manner: a task runs for some time, then suspends and lets other tasks run, hoping it will get more time in the future. By this mechanism, an OS can run thousands of processes on a machine that has only a few cores. If multiple tasks do run at the same physical time, as in the case of a multi-core machine or a cluster, then we have **parallelism**, a special case of concurrency [[1]](#footnote1).
 
 <img src="{static}/blog/python_bts_12/concurrency.png" alt="concurrency" style="width:580px; display: block; margin: 25px auto 0 auto;" />
 
@@ -1170,3 +1170,8 @@ The code for this post is available on [github](https://github.com/r4victor/pbts
 <br>
 
 *If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+
+<br>
+
+**Update from August 27, 2021**: <span id="footnote1">[1]</span> The relationship between concurrency and parallelism is more subtle. Usually, concurrency is viewed as a property of a program and parallelism as a property of a program execution. Thus, you can have "parallelism without concurrency" – even the execution of a sequentially-looking program involves [instruction-level](https://en.wikipedia.org/wiki/Instruction-level_parallelism) or [bit-level parallelism](https://en.wikipedia.org/wiki/Bit-level_parallelism). Task-level parallelism is indeed a special case of concurrency.
+
