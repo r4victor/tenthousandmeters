@@ -65,7 +65,7 @@ Writing a TCP echo server that handles only one client at a time is straightforw
 import socket
 
 
-def run_sever(host='127.0.0.1', port=55555):
+def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -88,7 +88,7 @@ def handle_client(sock):
 
 
 if __name__ == '__main__':
-    run_sever()
+    run_server()
 ```
 
 Take time to study this code. We'll be using it as a framework for subsequent, concurrent versions of the server. If you need a reminder on sockets, check out [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/) and the [docs on the `socket` module](https://docs.python.org/3/library/socket.html). What we do here in a nutshell is:
@@ -139,7 +139,7 @@ import socket
 import threading
 
 
-def run_sever(host='127.0.0.1', port=55555):
+def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -163,7 +163,7 @@ def handle_client(sock: socket.socket):
 
 
 if __name__ == '__main__':
-    run_sever()
+    run_server()
 ```
 
 Now multiple clients can talk to the server simultaneously:
@@ -207,7 +207,7 @@ from concurrent.futures import ThreadPoolExecutor
 pool = ThreadPoolExecutor(max_workers=20)
 
 
-def run_sever(host='127.0.0.1', port=55555):
+def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -230,7 +230,7 @@ def handle_client(sock):
 
 
 if __name__ == '__main__':
-    run_sever()
+    run_server()
 ```
 
 The thread pool approach is both simple and practical. Note, however, that you still need to do something to prevent slow clients from occupying the thread pool. You may drop long-living connections, require the clients to maintain some minimum throughput rate, let the threads return the tasks to the queue or combine any of the suggested methods. The conclusion here is that making the server concurrent using OS threads is not as straightforward as it may seem at first, and it's worthwhile to explore other approaches to concurrency. 
@@ -423,7 +423,7 @@ from event_loop_01_no_io import EventLoopNoIO
 loop = EventLoopNoIO()
 
 
-def run_sever(host='127.0.0.1', port=55555):
+def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -449,7 +449,7 @@ def handle_client(sock):
 
 
 if __name__ == '__main__':
-    loop.create_task(run_sever())
+    loop.create_task(run_server())
     loop.run()
 ```
 
@@ -493,7 +493,7 @@ from event_loop_02_io import EventLoopIo
 loop = EventLoopIo()
 
 
-def run_sever(host='127.0.0.1', port=55555):
+def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -519,7 +519,7 @@ def handle_client(sock):
 
 
 if __name__ == '__main__':
-    loop.create_task(run_sever())
+    loop.create_task(run_server())
     loop.run()
 ```
 
@@ -750,7 +750,7 @@ from event_loop_03_yield_from import EventLoopYieldFrom
 loop = EventLoopYieldFrom()
 
 
-def run_sever(host='127.0.0.1', port=55555):
+def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -773,7 +773,7 @@ def handle_client(sock):
 
 
 if __name__ == '__main__':
-    loop.create_task(run_sever())
+    loop.create_task(run_server())
     loop.run()
 ```
 
@@ -871,7 +871,7 @@ from event_loop_04_async_await import EventLoopAsyncAwait
 loop = EventLoopAsyncAwait()
 
 
-async def run_sever(host='127.0.0.1', port=55555):
+async def run_server(host='127.0.0.1', port=55555):
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -894,7 +894,7 @@ async def handle_client(sock):
 
 
 if __name__ == '__main__':
-    loop.create_task(run_sever())
+    loop.create_task(run_server())
     loop.run()
 ```
 
