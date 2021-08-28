@@ -599,7 +599,7 @@ We'll see why we need true coroutines if try to factor out some generator's code
 
 ```python
 yield 'wait_read', sock
-recieved_data = sock.recv(4096)
+received_data = sock.recv(4096)
 ```
 
 It would be very handy to factor them out into a separate function:
@@ -613,7 +613,7 @@ def async_recv(sock, n):
 and then call the function like this:
 
 ```python
-recieved_data = async_recv(sock, 4096)
+received_data = async_recv(sock, 4096)
 ```
 
 But it won't work. The `async_recv()` function returns a generator, not the data. So the `handle_client()` generator has to run the `async_recv()` subgenerator with `next()`. However, it can't just keep calling `next()` until the subgenerator is exhausted. The subgenerator yields values to the event loop, so `handle_client()` has to reyield them. It also has to handle the `StopIteration` exception and extract the result. Obviously, the amount of work that it has to do exceeds all the benefits of factoring out two lines of code.
@@ -646,7 +646,7 @@ Generators also got the [`throw()`](https://docs.python.org/3/reference/expressi
 Here's how this enhancement solved the subgenerator issue. Instead of running a subgenerator in place, a generator could now `yield` it to the event loop, and the event loop would run the subgenerator and then `send()` the result back to the generator (or throw an exception into the generator if the subgenerator raised one). The generator would call the subgenerator like this:
 
 ```python
-recieved_data = yield async_recv(sock)
+received_data = yield async_recv(sock)
 ```
 
 And this call would work just as if one coroutine calls another.
@@ -679,7 +679,7 @@ This algorithm requires some elaboration. First, `yield from` automatically prop
 Here's how you can remember what `yield from` does: it makes the subgenerator work as if the subgenerator's code were a part of the generator. So this `yield from` call:
 
 ```python
-recieved_data = yield from async_recv(sock)
+received_data = yield from async_recv(sock)
 ```
 
 works as if the call were replaced with the code of `async_recv()`. This also counts as a coroutine call, and in contrast to the previous `yield`-based solution, the event loop logic stays the same.
