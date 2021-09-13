@@ -2,9 +2,9 @@ Title: Python behind the scenes #13: the GIL and its effects on Python multithre
 Date: 2021-09-06 12:50
 Tags: Python behind the scenes, Python, CPython
 
-As you probably know, the GIL stands for the Global Interpreter Lock, and its job is to make the CPython interpreter thread-safe. The GIL allows only one OS thread to execute Python bytecode at any given time, and the consequence of this is that you cannot speed up CPU-intensive Python code by distributing the work among multiple threads. This is, however, not the only negative effect of the GIL. The GIL often makes multi-threaded programs slower compared to their single-threaded equivalents and, what is more surprising, can even affect the performance of I/O-bound threads.
+As you probably know, the GIL stands for the Global Interpreter Lock, and its job is to make the CPython interpreter thread-safe. The GIL allows only one OS thread to execute Python bytecode at any given time, and the consequence of this is that you cannot speed up CPU-intensive Python code by distributing the work among multiple threads. This is, however, not the only negative effect of the GIL. The GIL can make a multi-threaded program slower compared to its single-threaded equivalent and, what is more surprising, can even affect the performance of I/O-bound threads.
 
-In this post I'd like to tell you more about those non-obvious effects of the GIL. As we study them, we'll discuss what the GIL really is, why it exists, how it works, how it evolved, and how it's going to affect Python concurrency in the future.
+In this post I'd like to tell you more about non-obvious effects of the GIL. As we study them, we'll discuss what the GIL really is, why it exists, how it works, how it evolved, and how it's going to affect Python concurrency in the future.
 
 **Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
@@ -93,13 +93,44 @@ struct bootstate {
 
 The `t_bootstrap()` function does a number of things, but most importantly, it acquires the GIL and then enters the evaluation loop to execute the bytecode of the target function.
 
-To acquire the GIL, a thread first checks whether some other thread holds the GIL. If this is not the case, it acquires the GIL immediately. Otherwise, it waits until the GIL is released. It waits for a fixed time interval (5 ms by default), and if the GIL is not released during that period, it sets the `gil_drop_request` flag. The GIL-holding thread sees this flag when it starts the next iteration of the evaluation loop and releases the GIL. One of the GIL-waiting threads acquires the GIL. It may or may not be the thread that set `gil_drop_request`.
+To acquire the GIL, a thread first checks whether some other thread holds the GIL. If this is not the case, the thread acquires the GIL immediately. Otherwise, it waits until the GIL is released. It waits for a fixed time interval (5 ms by default), and if the GIL is not released during that period, it sets the `gil_drop_request` flag. The GIL-holding thread sees this flag when it starts the next iteration of the evaluation loop and releases the GIL. One of the GIL-waiting threads acquires the GIL. It may or may not be the thread that set `gil_drop_request`.
 
 That's the bare minimum of what we need to know about the GIL. Let me now demonstrate its effects that I was talking about earlier. If you find them interesting, proceed with the next sections in which we study the GIL in more detail.
 
 ## The effects of the GIL
 
-Experiments
+The first effect of the GIL is well-known: multiple Python threads cannot run in parallel on a multi-core machine. Thus, a multi-threaded program is not faster than its single-threaded equivalent. Consider the following CPU-bound function that performs the decrement operation a given number of times:
+
+```python
+def countdown(n):
+    while n > 0:
+        n -= 1
+```
+
+Now suppose we want to perform 100,000,000 decrements. We may run `countdown(100_000_000)` in a single thread, or `countdown(50_000_000)` in two threads, or `countdown(25_000_000)` in four threads, and so forth. In the language without the GIL like C, we would see a speedup as the number of threads increases. Running Python on my MacBook Pro with 4 cores, I see the following:
+
+| Number of threads | Operations per thread (n) | Time in seconds (best of 3) |
+| ----------------- | ------------------------- | --------------------------- |
+| 1                 | 100,000,000               | 6.52                        |
+| 2                 | 50,000,000                | 6.57                        |
+| 4                 | 25,000,000                | 6.59                        |
+| 8                 | 12,500,000                | 6.58                        |
+
+The times don't change. In fact, multi-threaded programs may run slower because of the overhead associated with context switching. We'll see this effect later.
+
+Although Python threads cannot help us speed up CPU-intensive code, they are useful when we want to perform multiple I/O-bound tasks simultaneously. Consider a server that listens for incoming connections and, when it receives a connection, runs a handler function in a separate thread. The handler function talks to the client by reading from and writing to the client's socket. When reading from the socket, the thread just hangs until the client sends something. This is where multithreading helps us: another thread can run in the meantime.
+
+To allow other threads run while the currently running thread is waiting for I/O, CPython implements all I/O operations using the following pattern:
+
+1. release the GIL;
+2. perform the operation, e.g. [`recv()`](https://man7.org/linux/man-pages/man2/recv.2.html) or [`select()`](https://man7.org/linux/man-pages/man2/select.2.html);
+3. acquire the GIL.
+
+Thus, threads sometimes release the GIL voluntarily before another thread sets `gil_drop_request`. 
+
+In general, 
+
+
 
 ## How the GIL works
 
