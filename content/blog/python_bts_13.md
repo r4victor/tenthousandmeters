@@ -128,7 +128,7 @@ To allow other threads run while the currently running thread is waiting for I/O
 
 Thus, threads sometimes release the GIL voluntarily before another thread sets `gil_drop_request`.
 
-In general, a thread needs to hold the GIL only while it works with Python objects. So CPython releases the GIL when performing any significant computations in pure C or when calling into the OS, not just when doing I/O. For example, hash functions in the `hashlib` module release the GIL when computing hashes. This allows us to actually speed up Python code that calls such functions using multithreading.
+In general, a thread needs to hold the GIL only while it works with Python objects. So CPython releases the GIL when performing any significant computations in pure C or when calling into the OS, not just when doing I/O. For example, hash functions in the [`hashlib`](https://docs.python.org/3/library/hashlib.html) module release the GIL when computing hashes. This allows us to actually speed up Python code that calls such functions using multithreading.
 
 Suppose we need to compute SHA-256 hashes of eight 128 MB messages. We may compute `hashlib.sha256(message).digest()` for each message in a single thread, but we may also distribute the work among multiple threads. If I do that on my machine, I get the following results:
 
@@ -192,9 +192,27 @@ if __name__ == '__main__':
     run_server()
 ```
 
-How do you expect the RPS to change? Slightly? 2x less? 10x less? No. The RPS drops to 100, which is 300x less!
+How do you expect the RPS to change? Slightly? 2x less? 10x less? No. The RPS drops to 100, which is 300x less! And this is very surprising if you are used to the way operating systems schedule threads. To see what I mean, let's run the server and the CPU-bound thread as separate processes so that they are not affected by the GIL. We can move the code to different files or just use the [`multiprocessing`](https://docs.python.org/3/library/multiprocessing.html) standard module to spawn a new process like so:
 
-## How the GIL works
+```python
+from multiprocessing import Process
+
+# ... the same server code
+
+if __name__ == '__main__':
+    Process(target=compute).start()
+    run_server()
+```
+
+And this yields about 20k RPS. Moreover, if we start two, three, or four CPU-bound processes, the RPS stays about the same. The OS scheduler prioritizes the I/O thread, which is the right thing to do.
+
+In the server example the I/O thread waits for the socket to become ready for reading and writing, but the performance of any other I/O thread would degrade just the same. Consider a UI thread that waits for user input. It would freeze regularly if you run it alongside a CPU-bound thread. Clearly, this is not how normal OS threads work, and the cause is the GIL. It somehow interferes with the OS scheduler.
+
+This problem is actually well-known among CPython developers. David Beazley gave a [talk](https://www.youtube.com/watch?v=Obt-vMVdM8s) about it in 2010 and also opened a [related issue on bugs.python.org](https://bugs.python.org/issue7946). The issue was closed this year, but it was never fixed. In the rest of this post we'll try to figure out why. Let's begin with a high-level explanation of the problem.
+
+The problem takes place because each time the I/O-bound thread performs an I/O operation, it releases the GIL, and when it tries to require the GIL after the operation, the CPU-bound thread already holds it. So the I/O-bound thread must wait for at least 5 ms before it can set `gil_drop_request` and force the CPU-bound thread to release the GIL. On single-core machines, the problem doesn't exist because it is the OS that decides whether to schedule the I/O-bound or the CPU-bound thread. And the OS does the scheduling well. On a multi-core machine, the OS doesn't have to decide which thread to schedule. It can schedule both on different cores. The result is that the CPU-bound thread happens to acquire the GIL first most of the time, and each I/O operation in the I/O-bound thread costs at least 5 ms more.
+
+## Deconstructing the GIL
 
 The GIL state, mutexes, conditional variables
 
