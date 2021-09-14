@@ -5,7 +5,7 @@ Summary: Have you ever wondered what `python` does when you run one of your prog
          ```
          $ python script.py
          ```
-​         This article opens a series which seeks to answer this very question.
+         This article opens a series which seeks to answer this very question.
 
 ## Introduction
 
