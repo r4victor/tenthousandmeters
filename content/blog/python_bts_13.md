@@ -107,7 +107,7 @@ def countdown(n):
         n -= 1
 ```
 
-Now suppose we want to perform 100,000,000 decrements. We may run `countdown(100_000_000)` in a single thread, or `countdown(50_000_000)` in two threads, or `countdown(25_000_000)` in four threads, and so forth. In the language without the GIL like C, we would see a speedup as the number of threads increases. Running Python on my MacBook Pro with 4 cores, I see the following:
+Now suppose we want to perform 100,000,000 decrements. We may run `countdown(100_000_000)` in a single thread, or `countdown(50_000_000)` in two threads, or `countdown(25_000_000)` in four threads, and so forth. In the language without the GIL like C, we would see a speedup as the number of threads increases. Running Python on my MacBook Pro with 2 cores and [hyper-threading](https://en.wikipedia.org/wiki/Hyper-threading), I see the following:
 
 | Number of threads | Operations per thread (n) | Time in seconds (best of 3) |
 | ----------------- | ------------------------- | --------------------------- |
@@ -123,14 +123,76 @@ Although Python threads cannot help us speed up CPU-intensive code, they are use
 To allow other threads run while the currently running thread is waiting for I/O, CPython implements all I/O operations using the following pattern:
 
 1. release the GIL;
-2. perform the operation, e.g. [`recv()`](https://man7.org/linux/man-pages/man2/recv.2.html) or [`select()`](https://man7.org/linux/man-pages/man2/select.2.html);
+2. perform the operation, e.g. [`write()`](https://man7.org/linux/man-pages/man2/write.2.html), [`recv()`](https://man7.org/linux/man-pages/man2/recv.2.html) or [`select()`](https://man7.org/linux/man-pages/man2/select.2.html);
 3. acquire the GIL.
 
-Thus, threads sometimes release the GIL voluntarily before another thread sets `gil_drop_request`. 
+Thus, threads sometimes release the GIL voluntarily before another thread sets `gil_drop_request`.
 
-In general, 
+In general, a thread needs to hold the GIL only while it works with Python objects. So CPython releases the GIL when performing any significant computations in pure C or when calling into the OS, not just when doing I/O. For example, hash functions in the `hashlib` module release the GIL when computing hashes. This allows us to actually speed up Python code that calls such functions using multithreading.
+
+Suppose we need to compute SHA-256 hashes of eight 128 MB messages. We may compute `hashlib.sha256(message).digest()` for each message in a single thread, but we may also distribute the work among multiple threads. If I do that on my machine, I get the following results:
+
+| Number of threads | Message size per thread | Time in seconds (best of 3) |
+| ----------------- | ----------------------- | --------------------------- |
+| 1                 | 1 GB                    | 3.30                        |
+| 2                 | 512 MB                  | 1.68                        |
+| 4                 | 256 MB                  | 1.50                        |
+| 8                 | 128 MB                  | 1.60                        |
+
+Going from one thread to two threads is almost 2x speed-up because the threads run in parallel. Adding more threads doesn't help much because my machine has only 2 physical cores. The conclusion here is that it is possible to speed up CPU-intensive Python code using multithreading if that code calls C functions that release the GIL. And such functions can be found not only in the standard library but also in computational-heavy third-party modules like [NumPy](https://github.com/numpy/numpy). You can even write a C extension that releases the GIL yourself.
+
+We've mentioned CPU-bound threads – threads that compute something most of the time, and I/O-bound threads – threads that wait for I/O most of the time. The most interesting effect of the GIL takes place when we mix the two. Consider a simple TCP echo server that listens for incoming connections and, when a client connects, spawns a new thread to handle the client:
+
+```python
+from threading import Thread
+import socket
 
 
+def run_server(host='127.0.0.1', port=33333):
+    sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen()
+    while True:
+        client_sock, addr = sock.accept()
+        print('Connection from', addr)
+        Thread(target=handle_client, args=(client_sock,)).start()
+
+
+def handle_client(sock):
+    while True:
+        received_data = sock.recv(4096)
+        if not received_data:
+            break
+        sock.sendall(received_data)
+
+    print('Client disconnected:', sock.getpeername())
+    sock.close()
+
+
+if __name__ == '__main__':
+    run_server()
+```
+
+How many requests per second can this sever handle? I wrote a simple client program that just sends and receives 1-byte message to the server as fast as it can and got something about 30k RPS. This is most probably not an accurate measure since the client and the server run on the same machine, but that's not the point. The point is to see how the RPS drops if the server performs some CPU-bound task in a separate thread.
+
+Consider the exact same server but with an additional dummy thread that increments and decrements the same variable in an infinite loop (any CPU-bound task will do just the same):
+
+```python
+# ... the same server code
+
+def compute():
+    n = 0
+    while True:
+        n += 1
+        n -= 1
+
+if __name__ == '__main__':
+    Thread(target=compute).start()
+    run_server()
+```
+
+How do you expect the RPS to change? Slightly? 2x less? 10x less? No. The RPS drops to 100, which is 300x less!
 
 ## How the GIL works
 
