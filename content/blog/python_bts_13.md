@@ -224,7 +224,30 @@ Now, how much is 5 ms? It depends on how much the I/O operations take. If the th
 
 In our example, the server without the CPU-bound thread handles 30k RPS, which means that a single request takes about 1/30k ≈ 30 µs. With the CPU-bound thread, `recv()` and `send()` add extra 5 ms = 5,000 µs to every request each, and a single request now takes 10,030 µs. This is about 300x more. Thus, the performance is 300x less. The numbers match.
 
+You may ask: Is the convoy effect a problem in real-world applications? I don't know. It never was a problem for me, nor could I find evidence that anyone else ran into it. People do not complain, and this is part of the reason why the issue hasn't been fixed.
 
+But what if the convoy effect does cause performance problems in your application? There are two ways you can fix it.
+
+## Fixing the convoy effect
+
+Since the problem is that the I/O-bound thread waits for the switch interval until it requests the GIL, we may try to set the switch interval to a smaller value. Python provides the [`sys.setswitchinterval(interval)`](https://docs.python.org/3/library/sys.html#sys.setswitchinterval) function for that purpose. The `interval` argument is a floating-point value representing seconds. The switch interval is measured in microseconds, so the smallest value is `0.000001`. Here's the RPS I get if I vary the switch interval and the number of CPU threads:
+
+| Switch interval in seconds | RPS with no CPU threads | RPS with one CPU threads | RPS with two CPU threads | RPS with four CPU threads |
+| -------------------------- | ----------------------- | ------------------------ | ------------------------ | ------------------------- |
+| 0.1                        | 30,000                  | 5                        | 2                        | 0                         |
+| 0.01                       | 30,000                  | 50                       | 30                       | 15                        |
+| **0.005**                  | **30,000**              | **100**                  | **50**                   | **30**                    |
+| 0.001                      | 30,000                  | 500                      | 280                      | 200                       |
+| 0.0001                     | 30,000                  | 3,200                    | 1,700                    | 1000                      |
+| 0.00001                    | 30,000                  | 11,000                   | 5,500                    | 2,800                     |
+| 0.000001                   | 30,000                  | 10,000                   | 4,500                    | 2,500                     |
+
+The results show several things: 
+
+* The switch interval is irrelevant if the I/O-bound thread is the only thread.
+* As we add one CPU-bound thread, the RPS drops significantly.
+* As we double the number of CPU-bound threads, the RPS halves.
+* As we decrease the switch interval, the RPS increases almost proportionally until the switch interval becomes too small. This is because the cost of context switching becomes significant.
 
 ## How operating systems schedule threads
 
