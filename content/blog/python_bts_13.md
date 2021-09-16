@@ -249,6 +249,34 @@ The results show several things:
 * As we double the number of CPU-bound threads, the RPS halves.
 * As we decrease the switch interval, the RPS increases almost proportionally until the switch interval becomes too small. This is because the cost of context switching becomes significant.
 
+Smaller switch intervals make I/O-bound threads more responsive. But too small switch intervals introduce a lot of overhead caused by a high number of context switches. Recall the `countdown()` function. We saw that we cannot speed it up with multiple threads. If we set the switch interval too small, then we'll also see a slowdown:
+
+| Switch interval in seconds | Elapsed time (one thread) | Elapsed time (two threads) | Elapsed time (four threads) | Elapsed time (eight threads) |
+| -------------------------- | ------------------------- | -------------------------- | --------------------------- | ---------------------------- |
+| 0.1                        | 7.29                      | 6.80                       | 6.50                        | 6.61                         |
+| 0.01                       | 6.62                      | 6.61                       | 7.15                        | 6.71                         |
+| **0.005**                  | **6.53**                  | **6.58**                   | **7.20**                    | **7.19**                     |
+| 0.001                      | 7.02                      | 7.36                       | 7.56                        | 7.12                         |
+| 0.0001                     | 6.77                      | 9.20                       | 9.36                        | 9.84                         |
+| 0.00001                    | 6.68                      | 12.29                      | 19.15                       | 30.53                        |
+| 0.000001                   | 6.89                      | 17.16                      | 31.68                       | 86.44                        |
+
+Again, the switch interval doesn't matter if there is only one thread. Also, the number of threads doesn't matter if the switch interval is large enough. A small switch interval and several threads is when you get poor performance.
+
+The conclusion is that changing the switch interval is an option, but you should be careful to measure how it affects your application.
+
+There is another way to fix the convoy effect that I came up with. Since the problem is much less severe on single-core machines, we could try to restrict all Python threads to a single-core. This would force the OS to choose which thread to schedule, and the I/O-bound thread would have the priority.
+
+Not every OS provides a way to restrict a group of threads to certain cores. As far as I understand, macOS provides only a [mechanism](https://developer.apple.com/library/archive/releasenotes/Performance/RN-AffinityAPI/) to give hints to the OS scheduler. The mechanism that we need is available on Linux. It's the [`pthread_setaffinity_np()`](https://man7.org/linux/man-pages/man3/pthread_setaffinity_np.3.html) function. You pass a thread and a mask of CPU cores to `pthread_setaffinity_np()`, and the OS schedules the thread only on the cores specified by the mask.
+
+`pthread_setaffinity_np()` is a C function. To call it from Python, you may use something like [`ctypes`](https://docs.python.org/3/library/ctypes.html). I didn't want to mess with `ctypes`, so I just modified the CPython source code. Then I compiled the executable, ran the echo server on a dual core Ubuntu machine and got the following results:
+
+| Number of CPU-bound threads | 0    | 1    | 2    | 4    | 8    |
+| :-------------------------- | ---- | ---- | ---- | ---- | ---- |
+| RPS                         | 24k  | 12k  | 3k   | 30   | 10   |
+
+The server can tolerate one CPU-bound thread quite well. But since the I/O-bound thread needs to compete with other threads for the GIL, as we add more threads, the performance drops massively. The fix is more of a hack.
+
 ## How operating systems schedule threads
 
 the ready queue, the queue of threads waiting on a CV
