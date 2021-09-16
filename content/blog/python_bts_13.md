@@ -93,7 +93,7 @@ struct bootstate {
 
 The `t_bootstrap()` function does a number of things, but most importantly, it acquires the GIL and then enters the evaluation loop to execute the bytecode of the target function.
 
-To acquire the GIL, a thread first checks whether some other thread holds the GIL. If this is not the case, the thread acquires the GIL immediately. Otherwise, it waits until the GIL is released. It waits for a fixed time interval called the **switch interval** (5 ms by default), and if the GIL is not released during that interval, it sets the `gil_drop_request` flag. The GIL-holding thread sees this flag when it starts the next iteration of the evaluation loop and releases the GIL. One of the GIL-waiting threads acquires the GIL. It may or may not be the thread that set `gil_drop_request`.
+To acquire the GIL, a thread first checks whether some other thread holds the GIL. If this is not the case, the thread acquires the GIL immediately. Otherwise, it waits until the GIL is released. It waits for a fixed time interval called the **switch interval** (5 ms by default), and if the GIL is not released during that interval, it sets the `eval_breaker` and `gil_drop_request` flags. The `eval_breaker` flag tells the GIL-holding thread to suspend bytecode execution, and `gil_drop_request` tells why. The GIL-holding thread sees the flags when it starts the next iteration of the evaluation loop and releases the GIL. It notifies the GIL-awaiting threads, and one of them acquires the GIL. It may or may not be the thread that set the flags.
 
 That's the bare minimum of what we need to know about the GIL. Let me now demonstrate its effects that I was talking about earlier. If you find them interesting, proceed with the next sections in which we study the GIL in more detail.
 
@@ -118,7 +118,7 @@ Now suppose we want to perform 100,000,000 decrements. We may run `countdown(100
 
 The times don't change. In fact, multi-threaded programs may run slower because of the overhead associated with [context switching](https://en.wikipedia.org/wiki/Context_switch). The default switch interval is 5 ms, so context switches do not happens that often. We'll see a substantial slowdown if we decrease the switch interval with [`sys.setswitchinterval()`](https://docs.python.org/3/library/sys.html#sys.setswitchinterval). More on this later.
 
-Although Python threads cannot help us speed up CPU-intensive code, they are useful when we want to perform multiple I/O-bound tasks simultaneously. Consider a server that listens for incoming connections and, when it receives a connection, runs a handler function in a separate thread. The handler function talks to the client by reading from and writing to the client's socket. When reading from the socket, the thread just hangs until the client sends something. This is where multithreading helps us: another thread can run in the meantime.
+Although Python threads cannot help us speed up CPU-intensive code, they are useful when we want to perform multiple I/O-bound tasks simultaneously. Consider a server that listens for incoming connections and, when it receives a connection, runs a handler function in a separate thread. The handler function talks to the client by reading from and writing to the client's socket. When reading from the socket, the thread just hangs until the client sends something. This is where multithreading helps: another thread can run in the meantime.
 
 To allow other threads run while the currently running thread is waiting for I/O, CPython implements all I/O operations using the following pattern:
 
@@ -126,11 +126,11 @@ To allow other threads run while the currently running thread is waiting for I/O
 2. perform the operation, e.g. [`write()`](https://man7.org/linux/man-pages/man2/write.2.html), [`recv()`](https://man7.org/linux/man-pages/man2/recv.2.html) or [`select()`](https://man7.org/linux/man-pages/man2/select.2.html);
 3. acquire the GIL.
 
-Thus, threads sometimes release the GIL voluntarily before another thread sets `gil_drop_request`.
+Thus, threads sometimes release the GIL voluntarily before another thread sets `eval_breaker` and `gil_drop_request`.
 
 In general, a thread needs to hold the GIL only while it works with Python objects. So CPython releases the GIL when performing any significant computations in pure C or when calling into the OS, not just when doing I/O. For example, hash functions in the [`hashlib`](https://docs.python.org/3/library/hashlib.html) standard module release the GIL when computing hashes. This allows us to actually speed up Python code that calls such functions using multithreading.
 
-Suppose we need to compute SHA-256 hashes of eight 128 MB messages. We may compute `hashlib.sha256(message).digest()` for each message in a single thread, but we may also distribute the work among multiple threads. If I do the comparison on my machine, I get the following results:
+Suppose we want to compute SHA-256 hashes of eight 128 MB messages. We may compute `hashlib.sha256(message).digest()` for each message in a single thread, but we may also distribute the work among multiple threads. If I do the comparison on my machine, I get the following results:
 
 | Number of threads | Message size per thread | Time in seconds (best of 3) |
 | ----------------- | ----------------------- | --------------------------- |
@@ -206,13 +206,25 @@ if __name__ == '__main__':
 
 And this yields about 20k RPS. Moreover, if we start two, three, or four CPU-bound processes, the RPS stays about the same. The OS scheduler prioritizes the I/O thread, which is the right thing to do.
 
-In the server example the I/O thread waits for the socket to become ready for reading and writing, but the performance of any other I/O thread would degrade just the same. Consider a UI thread that waits for user input. It would freeze regularly if you run it alongside a CPU-bound thread. Clearly, this is not how normal OS threads work, and the cause is the GIL. It somehow interferes with the OS scheduler.
+In the server example the I/O thread waits for the socket to become ready for reading and writing, but the performance of any other I/O thread would degrade just the same. Consider a UI thread that waits for user input. It would freeze regularly if you run it alongside a CPU-bound thread. Clearly, this is not how normal OS threads work, and the cause is the GIL. It interferes with the OS scheduler.
 
-This problem is actually well-known among CPython developers. They refer to it as the **convoy effect.** David Beazley gave a [talk](https://www.youtube.com/watch?v=Obt-vMVdM8s) about it in 2010 and also opened a [related issue on bugs.python.org](https://bugs.python.org/issue7946). In 2021, 11 years laters, the issue was closed. However, it hasn't been fixed. In the rest of this post we'll try to figure out why. We begin with a high-level explanation of the problem.
+This problem is actually well-known among CPython developers. They refer to it as the **convoy effect.** David Beazley gave a [talk](https://www.youtube.com/watch?v=Obt-vMVdM8s) about it in 2010 and also opened a [related issue on bugs.python.org](https://bugs.python.org/issue7946). In 2021, 11 years laters, the issue was closed. However, it hasn't been fixed. In the rest of this post we'll try to figure out why.
 
-The problem takes place because each time the I/O-bound thread performs an I/O operation, it releases the GIL, and when it tries to require the GIL after the operation, the CPU-bound thread already holds it. So the I/O-bound thread must wait for at least 5 ms before it can set `gil_drop_request` and force the CPU-bound thread to release the GIL. On single-core machines, the problem doesn't exist because it is the OS that decides whether to schedule the I/O-bound or the CPU-bound thread. And the OS does the scheduling well. On a multi-core machine, the OS doesn't have to decide which thread to schedule. It can schedule both on different cores. The result is that the CPU-bound thread happens to acquire the GIL first most of the time, and each I/O operation in the I/O-bound thread costs at least extra 5 ms.
+## The convoy effect
 
-This explanation is quite dense
+The convoy effect takes place because each time the I/O-bound thread performs an I/O operation, it releases the GIL, and when it tries to reacquire the GIL after the operation, the GIL is likely to be already taken by the CPU-bound thread. So the I/O-bound thread must wait for at least 5 ms before it can set `eval_breaker` and `gil_drop_request` to force the CPU-bound thread to release the GIL.
+
+The OS can schedule the CPU-bound thread as soon as the I/O-bound thread releases the GIL. The I/O-bound thread can be scheduled only when the I/O operation completes, so it has less chances to take the GIL first. If the operation is really fast such as a non-blocking `send()`, the chances are actually quite good but only on a single-core machine where the OS has to decide which thread to schedule. Because the OS prioritizes I/O-bound threads, the fact of choice mitigates the convoy effect.
+
+On a multi-core machine, the OS doesn't have to decide which thread to schedule. It can schedule both on different cores. The result is that the CPU-bound thread is almost guaranteed to acquire the GIL first, and each I/O operation in the I/O-bound thread costs extra 5 ms.
+
+Note that a thread that is forced to release the GIL waits until another thread takes it, so the I/O-bound acquires the GIL after one switch interval. Without this logic, the convoy effect would be even more severe.
+
+Now, how much is 5 ms? It depends on how much the I/O operations take. If the thread waits for seconds until the data on the socket becomes available for reading, extra 5 ms do not matter much. But some I/O operations are really fast. For example, [`send()`](https://man7.org/linux/man-pages/man2/send.2.html) blocks only when the send buffer is full and returns immediately otherwise. So if the I/O operations take microseconds, then milliseconds of waiting for the GIL may have a huge effect.
+
+In our example, the server without the CPU-bound thread handles 30k RPS, which means that a single request takes about 1/30k ≈ 30 µs. With the CPU-bound thread, `recv()` and `send()` add extra 5 ms = 5,000 µs to every request each, and a single request now takes 10,030 µs. This is about 300x more. Thus, the performance is 300x less. The numbers match.
+
+
 
 ## How operating systems schedule threads
 
@@ -242,7 +254,7 @@ Steps to drop the GIL:
 
 1. Lock the GIL mutex: `pthread_mutex_lock(&gil->mutex)`.
 2. Reset `gil->locked`.
-3. Notify the GIL-waiting threads that we drop the GIL: `pthread_cond_signal(&gil->cond)`.
+3. Notify the GIL-awaiting threads that we drop the GIL: `pthread_cond_signal(&gil->cond)`.
 4. Unlock the GIL mutex: `pthread_mutex_unlock(&gil->mutex)`.
 5. If `ceval->gil_drop_request`, wait for the other thread to take the GIL:
     1. Lock the switch mutex: `pthread_mutex_lock(&gil->switch_mutex)`.
