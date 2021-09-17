@@ -275,7 +275,15 @@ Not every OS provides a way to restrict a group of threads to certain cores. As 
 | :-------------------------- | ---- | ---- | ---- | ---- | ---- |
 | RPS                         | 24k  | 12k  | 3k   | 30   | 10   |
 
-The server can tolerate one CPU-bound thread quite well. But since the I/O-bound thread needs to compete with other threads for the GIL, as we add more threads, the performance drops massively. The fix is more of a hack.
+The server can tolerate one CPU-bound thread quite well. But since the I/O-bound thread needs to compete with other threads for the GIL, as we add more threads, the performance drops massively. The fix is more of a hack. Why don't CPython developers just implement a proper GIL?
+
+## A proper GIL
+
+The fundamental problem with the GIL is that it interferes with the OS scheduler. Ideally, you would like to run an I/O-bound thread as soon the I/O operation it waits for completes. And that's what the OS scheduler does. But then the thread gets stuck immediately waiting for the GIL, so the OS scheduler's decision doesn't really mean anything. You may try to get rid of the switch interval so that a thread that wants the GIL gets it immediately. But then you have a problem with CPU-bound threads because they want the GIL all the time.
+
+The proper solution is to differentiate between the threads. An I/O-bound thread should be able to take away the GIL from CPU-bound thread without waiting, but threads with the same priority should wait for each other. The OS scheduler already differentiates between the threads, but you cannot rely on it because it knows nothing about the GIL. It seems that the only option is to implement the scheduling logic in the interpreter.
+
+
 
 ## How operating systems schedule threads
 
