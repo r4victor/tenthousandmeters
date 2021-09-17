@@ -283,7 +283,24 @@ The fundamental problem with the GIL is that it interferes with the OS scheduler
 
 The proper solution is to differentiate between the threads. An I/O-bound thread should be able to take away the GIL from CPU-bound thread without waiting, but threads with the same priority should wait for each other. The OS scheduler already differentiates between the threads, but you cannot rely on it because it knows nothing about the GIL. It seems that the only option is to implement the scheduling logic in the interpreter.
 
+After David Beazley opened the [issue](https://bugs.python.org/issue7946), CPython developers made several attempts to solve it. Beazley himself proposed a [simple patch](http://dabeaz.blogspot.com/2010/02/revisiting-thread-priorities-and-new.html). In short, this patch allows an I/O-bound thread to preempt a CPU-bound thread. By default, all threads are considered I/O-bound. Once a thread is forced to release the GIL, it's flagged as CPU-bound. When a thread releases the GIL voluntarily, the flag is reset, and the thread is considered I/O-bound again.
 
+Beazley's patch doesn't suffer from any of the GIL problems that we've discussed today. Why hasn't it been merged? The consensus seems to be that any simple implementation of the GIL would fail in some pathological cases. At most, you might need to try a bit harder to find them.
+
+A proper solution has to do scheduling like an OS, or as Nir Aides put it:
+
+> ... Python really needs a scheduler, not a lock.
+
+So Aides implemented a full-fledged scheduler in [his patch](https://bugs.python.org/issue7946#msg101612).
+
+* hard
+* push
+
+all time question.
+
+## Removing the GIL
+
+Larry
 
 ## How operating systems schedule threads
 
