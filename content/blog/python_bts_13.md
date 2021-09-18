@@ -281,26 +281,43 @@ The server can tolerate one CPU-bound thread quite well. But since the I/O-bound
 
 The fundamental problem with the GIL is that it interferes with the OS scheduler. Ideally, you would like to run an I/O-bound thread as soon the I/O operation it waits for completes. And that's what the OS scheduler does. But then the thread gets stuck immediately waiting for the GIL, so the OS scheduler's decision doesn't really mean anything. You may try to get rid of the switch interval so that a thread that wants the GIL gets it immediately. But then you have a problem with CPU-bound threads because they want the GIL all the time.
 
-The proper solution is to differentiate between the threads. An I/O-bound thread should be able to take away the GIL from CPU-bound thread without waiting, but threads with the same priority should wait for each other. The OS scheduler already differentiates between the threads, but you cannot rely on it because it knows nothing about the GIL. It seems that the only option is to implement the scheduling logic in the interpreter.
+The proper solution is to differentiate between the threads. An I/O-bound thread should be able to take away the GIL from a CPU-bound thread without waiting, but threads with the same priority should wait for each other. The OS scheduler already differentiates between the threads, but you cannot rely on it because it knows nothing about the GIL. It seems that the only option is to implement the scheduling logic in the interpreter.
 
 After David Beazley opened the [issue](https://bugs.python.org/issue7946), CPython developers made several attempts to solve it. Beazley himself proposed a [simple patch](http://dabeaz.blogspot.com/2010/02/revisiting-thread-priorities-and-new.html). In short, this patch allows an I/O-bound thread to preempt a CPU-bound thread. By default, all threads are considered I/O-bound. Once a thread is forced to release the GIL, it's flagged as CPU-bound. When a thread releases the GIL voluntarily, the flag is reset, and the thread is considered I/O-bound again.
 
-Beazley's patch doesn't suffer from any of the GIL problems that we've discussed today. Why hasn't it been merged? The consensus seems to be that any simple implementation of the GIL would fail in some pathological cases. At most, you might need to try a bit harder to find them.
-
-A proper solution has to do scheduling like an OS, or as Nir Aides put it:
+Beazley's patch solved all the GIL problems that we've discussed today. Why hasn't it been merged? The consensus seems to be that any simple implementation of the GIL would fail in some pathological cases. At most, you might need to try a bit harder to find them. A proper solution has to do scheduling like an OS, or as Nir Aides put it:
 
 > ... Python really needs a scheduler, not a lock.
 
-So Aides implemented a full-fledged scheduler in [his patch](https://bugs.python.org/issue7946#msg101612).
+So Aides implemented a full-fledged scheduler in [his patch](https://bugs.python.org/issue7946#msg101612). The patch worked, but a scheduler is never a trivial thing, so merging it to CPython required a lot of effort. Finally, the work was abandoned because at the time there wasn't enough evidence that the issue caused problems in production code. See [the discussion](https://bugs.python.org/issue7946) for more details.
 
-* hard
-* push
+The GIL never had a huge fanbase. The effects we saw today only make it worse and raise the all time question again.
 
-all time question.
+## Can't we remove the GIL?
 
-## Removing the GIL
+The first step to remove the GIL is to understand why it exists. Think why you would typically use locks in a multi-threaded program, and you'll get the answer. It's to prevent race conditions and make certain operations atomic from the perspective of other threads. Say you have a sequence of statements that modifies some data structure. If you don't surround it with a lock, then another thread can access the data structure somewhere in the middle of the modification and get a broken incomplete view.
 
-Larry
+Or say you increment the same variable from multiple threads. If the increment operation is not atomic and not protected by a lock, then the final value of the variable can be less than the the total number of increments. This is a typical data race:
+
+1. Thread 1 reads the value `x`.
+2. Thread 2 reads the value `x`.
+3. Thread 1 writes back the value `x + 1`.
+4. Thread 2 writes back the value `x + 1`, thus discarding the changes made by Thread 1.
+
+In Python the `+=` operation is not atomic because it consists of multiple bytecode instructions. To see how it can lead to data races, set the switch interval to `0.000001` and run the following function in multiple threads:
+
+```python
+sum = 0
+
+def f():
+    global sum
+    for _ in range(100):
+        sum += 1
+```
+
+Similarly, in C incrementing an integer like `x++` or `++x` is not atomic because the compiler translates such operations to a sequence of machine instructions. Threads can interleave in between.
+
+
 
 ## How operating systems schedule threads
 
