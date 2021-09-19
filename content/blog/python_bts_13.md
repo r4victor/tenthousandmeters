@@ -295,7 +295,7 @@ The GIL never had a huge fanbase. The effects we saw today only make it worse an
 
 ## Can't we remove the GIL?
 
-The first step to remove the GIL is to understand why it exists. Think why you would typically use locks in a multi-threaded program, and you'll get the answer. It's to prevent race conditions and make certain operations atomic from the perspective of other threads. Say you have a sequence of statements that modifies some data structure. If you don't surround it with a lock, then another thread can access the data structure somewhere in the middle of the modification and get a broken incomplete view.
+The first step to remove the GIL is to understand why it exists. Think why you would typically use locks in a multi-threaded program, and you'll get the answer. It's to prevent race conditions and make certain operations atomic from the perspective of other threads. Say you have a sequence of statements that modifies some data structure. If you don't surround the sequence with a lock, then another thread can access the data structure somewhere in the middle of the modification and get a broken incomplete view.
 
 Or say you increment the same variable from multiple threads. If the increment operation is not atomic and not protected by a lock, then the final value of the variable can be less than the the total number of increments. This is a typical data race:
 
@@ -316,6 +316,30 @@ def f():
 ```
 
 Similarly, in C incrementing an integer like `x++` or `++x` is not atomic because the compiler translates such operations to a sequence of machine instructions. Threads can interleave in between.
+
+The GIL is so helpful because CPython increments and decrements integers that can be shared between threads all over the place. This is CPython's way to do garbage collection. Every Python object has a reference count field. This field counts the number of places that reference the object: other Python objects, local and global C variables. One place more increments the reference count. One place less decrements it. When the reference count reaches zero, the object is deallocated. If not the GIL, some decrements could overwrite each other and the object would stay in memory. Worse still, overwritten increments could result in a deallocated object that has active references.
+
+The GIL also simplifies the implementation of built-in mutable data structures. Lists, dicts and sets do not use locking internally, yet because of the GIL, they can be safely used in multi-threaded programs. Similarly, the GIL allows threads to safely access global and interpreter-wide data: loaded modules, preallocated objects, interned strings as so on.
+
+Finally, the GIL simplifies the writing of C extensions. Developers can assume that only one thread runs their C extension at any given time. Thus, they don't need to use additional locking to make the code thread-safe. When they do want to run the code in parallel, they can release the GIL.
+
+To sum up, what the GIL does is make the following thread-safe:
+
+1. reference counting;
+
+2. mutable data structures;
+
+3. global and interpreter-wide data;
+
+4. C extensions.
+
+To remove the GIL and still have a working interpreter, you need to find alternative mechanisms for thread-safety. People tried to do that in the past. The most notable attempt was Larry Hastings' Gilectomy project started in 2016. Hastings [forked](https://github.com/larryhastings/gilectomy) CPython, [removed](https://github.com/larryhastings/gilectomy/commit/4a1a4ff49e34b9705608cad968f467af161dcf02) the GIL, modified reference counting to use [atomic](https://gcc.gnu.org/onlinedocs/gcc-4.1.1/gcc/Atomic-Builtins.html) increments and decrements, and put a lot of fine-grained locks to protect mutable data structures and interpreter-wide data.
+
+Gilectomy could run some Python code and run it in parallel. However, the single-threaded performance of CPython was compromised. Atomic increments and decrements alone added about 30% overhead. Hastings tried to address this by implementing buffered reference counting. In short, this technique confines all reference count updates to one special thread. Other threads only commit the increments and decrements to the log, and the special thread reads the log. This worked, but the overhead was [still significant](https://mail.python.org/archives/list/python-dev@python.org/message/YJDRVOUSRVGCZTKIL7ZUJ6ITVWZTC246/).
+
+In the end, Gilectomy 
+
+## The future of the GIL and Python concurrency
 
 
 
