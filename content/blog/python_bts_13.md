@@ -346,7 +346,7 @@ There were similar projects before, but they failed because they required a lot 
 
 Faster CPython focuses on single-threaded performance. The team has no plans to change or remove the GIL. Nevertheless, if the project succeeds, one of the Python's major pain points will be fixed, and the GIL question may become more relevant than ever.
 
-If you want to study the GIL in more detail, you should read the source code. The [`Python/ceval_gil.h`](https://github.com/python/cpython/blob/3.9/Python/ceval_gil.h) file is a perfect place to start. I found this piece of CPython codebase a bit convoluted, so I wrote the following bonus chapter to help you with this venture.
+If you want to study the GIL in more detail, you should read the source code. The [`Python/ceval_gil.h`](https://github.com/python/cpython/blob/3.9/Python/ceval_gil.h) file is a perfect place to start. To help you with this venture, I wrote the following bonus section.
 
 ## The implementation details of the GIL *
 
@@ -378,7 +378,7 @@ struct _gil_runtime_state {
 };
 ```
 
-The `_gil_runtime_state` stuct is a part of the global state. It's stored in the `_ceval_runtime_state` struct, which in turn is a part of the runtime state that all Python threads have an access to:
+The `_gil_runtime_state` stuct is a part of the global state. It's stored in the `_ceval_runtime_state` struct, which in turn is a part of `_PyRuntimeState` that all Python threads have an access to:
 
 ```C
 struct _ceval_runtime_state {
@@ -416,7 +416,7 @@ struct _gilstate_runtime_state {
 };
 ```
 
-Finally, there is a `_ceval_state` struct, which is a part of the interpreter state. It stores the `eval_breaker` and `gil_drop_request` flags:
+Finally, there is a `_ceval_state` struct, which is a part of `PyInterpreterState`. It stores the `eval_breaker` and `gil_drop_request` flags:
 
 ```C
 struct _ceval_state {
@@ -471,9 +471,9 @@ eval_frame_handle_pending(PyThreadState *tstate)
 }
 ```
 
-On Unix-like systems the implementation of the GIL relies on primitives provided by the [pthreads](https://man7.org/linux/man-pages/man7/pthreads.7.html) library. These include mutexes and conditional variables. In short, they work as follows. A thread calls [`pthread_mutex_lock(mutex)`](https://linux.die.net/man/3/pthread_mutex_lock) to lock the mutex. When another does the same, it blocks. The OS puts it on the queue of threads that wait for the mutex and wakes it up when the first thread calls [`pthread_mutex_unlock(mutex)`](https://linux.die.net/man/3/pthread_mutex_unlock). Only one thread can run the protected code at a time.
+On Unix-like systems the implementation of the GIL relies on primitives provided by the [pthreads](https://man7.org/linux/man-pages/man7/pthreads.7.html) library. These include mutexes and conditional variables. In short, they work as follows. A thread calls [`pthread_mutex_lock(mutex)`](https://linux.die.net/man/3/pthread_mutex_lock) to lock the mutex. When another thread does the same, it blocks. The OS puts it on the queue of threads that wait for the mutex and wakes it up when the first thread calls [`pthread_mutex_unlock(mutex)`](https://linux.die.net/man/3/pthread_mutex_unlock). Only one thread can run the protected code at a time.
 
-Conditional variables allow one thread to wait until another thread makes some condition true. To wait on a conditional variable a thread locks a mutex and calls [`pthread_cond_wait(cond, mutex)`](https://linux.die.net/man/3/pthread_cond_wait) or [`pthread_cond_timedwait(cond, mutex, time)`](https://linux.die.net/man/3/pthread_cond_wait). These calls atomically unlock the mutex and make the thread block. The OS puts the thread on a waiting queue and wakes it up when another thread calls [`pthread_cond_signal()`](https://linux.die.net/man/3/pthread_cond_signal). The awakened thread locks the mutex again and proceeds. Here's a pseudocode:
+Conditional variables allow one thread to wait until another thread makes some condition true. To wait on a conditional variable a thread locks a mutex and calls [`pthread_cond_wait(cond, mutex)`](https://linux.die.net/man/3/pthread_cond_wait) or [`pthread_cond_timedwait(cond, mutex, time)`](https://linux.die.net/man/3/pthread_cond_wait). These calls atomically unlock the mutex and make the thread block. The OS puts the thread on a waiting queue and wakes it up when another thread calls [`pthread_cond_signal()`](https://linux.die.net/man/3/pthread_cond_signal). The awakened thread locks the mutex again and proceeds. Here's how conditional variables are typically used:
 
 ```python
 # awaiting thread
@@ -494,9 +494,11 @@ cond_signal(cond_variable)
 mutex.unlock()
 ```
 
-Note that the awaiting thread should check the condition in a loop because it's [not guaranteed](https://stackoverflow.com/questions/7766057/why-do-you-need-a-while-loop-while-waiting-for-a-condition-variable) to be true after the notification. The mutex ensures that the awaiting thread doesn't miss how the condition goes from false to true. 
+Note that the awaiting thread should check the condition in a loop because it's [not guaranteed](https://stackoverflow.com/questions/7766057/why-do-you-need-a-while-loop-while-waiting-for-a-condition-variable) to be true after the notification. The mutex ensures that the awaiting thread doesn't miss the condition going from false to true.
 
-CPython uses conditional variables to notify GIL-awaiting threads that the GIL has been released (`gil->cond`) and to notify the GIL-holding thread that other thread took the GIL (`gil->switch_cond`). These conditional variables are protected by two mutexes: `gil->mutex` and `gil->switch_mutex`. Don't worry if you don't understand the meaning of it all yet. It will become clear after you see what `take_gil()` and `drop_gil()` do. Here's the steps of `take_gil()`:
+The `take_gil()` and `drop_gil()` functions use the `gil->cond` conditional variable to notify GIL-awaiting threads that the GIL has been released and `gil->switch_cond` to notify the GIL-holding thread that other thread took the GIL. These conditional variables are protected by two mutexes: `gil->mutex` and `gil->switch_mutex`.
+
+Here's the steps of [`take_gil()`](https://github.com/python/cpython/blob/5d28bb699a305135a220a97ac52e90d9344a3004/Python/ceval_gil.h#L211) :
 
 1. Lock the GIL mutex: `pthread_mutex_lock(&gil->mutex)`.
 2. See if `gil->locked`. If it's not, go to step 4.
@@ -507,21 +509,32 @@ CPython uses conditional variables to notify GIL-awaiting threads that the GIL h
 4. Take the GIL and notify the GIL-holding thread that we took it:
     1. Lock the switch mutex: `pthread_mutex_lock(&gil->switch_mutex)`.
     2. Set `gil->locked`.
-    3. If the thread is not `gil->last_holder`, update `gil->last_holder` and increment `gil->switch_number`.
-    4. Notify the GIL-holding thread that we took the GIL: `pthread_cond_signal(&gil->switch_cond)`.
+    3. If we're not the `gil->last_holder` thread, update `gil->last_holder` and increment `gil->switch_number`.
+    4. Notify the GIL-releasing thread that we took the GIL: `pthread_cond_signal(&gil->switch_cond)`.
     5. Unlock the switch mutex: `pthread_mutex_unlock(&gil->switch_mutex)`.
 5. Reset `ceval->gil_drop_request`.
 6. Recompute `ceval->eval_breaker`.
 7. Unlock the GIL mutex: `pthread_mutex_unlock(&gil->mutex)`.
 
-The steps of `drop_gil()`:
+Note that while a thread waits for the GIL, another thread can took it, so it's necessary to check `gil->switch_number` to ensure that a thread that just took the GIL won't be forced to drop it.
+
+Finally, here's the steps of [`drop_gil()`](https://github.com/python/cpython/blob/5d28bb699a305135a220a97ac52e90d9344a3004/Python/ceval_gil.h#L144) :
 
 1. Lock the GIL mutex: `pthread_mutex_lock(&gil->mutex)`.
 2. Reset `gil->locked`.
 3. Notify the GIL-awaiting threads that we drop the GIL: `pthread_cond_signal(&gil->cond)`.
 4. Unlock the GIL mutex: `pthread_mutex_unlock(&gil->mutex)`.
-5. If `ceval->gil_drop_request`, wait for the other thread to take the GIL:
+5. If `ceval->gil_drop_request`, wait for another thread to take the GIL:
     1. Lock the switch mutex: `pthread_mutex_lock(&gil->switch_mutex)`.
-    2. If the thread is still `gil->last_holder`, wait: `pthread_cond_wait(&gil->switch_cond, &gil->switch_mutex)`.
+    2. If we're still `gil->last_holder`, wait: `pthread_cond_wait(&gil->switch_cond, &gil->switch_mutex)`.
     3. Unlock the switch mutex: `pthread_mutex_unlock(&gil->switch_mutex)`.
 
+Note that the GIL-releasing thread doesn't need to wait for a condition in a loop. It calls `pthread_cond_wait(&gil->switch_cond, &gil->switch_mutex)` only to ensure that it doesn't reacquire the GIL immediately. If the switch occurred, this means that another thread took the GIL, and it's fine to compete for the GIL again.
+
+That's it!
+
+<br>
+
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+
+<br>
