@@ -38,7 +38,7 @@ _PyEval_EvalFrameDefault(PyThreadState *tstate, PyFrameObject *f, int throwflag)
 
             // `eval_frame_handle_pending()` suspends bytecode execution
             // e.g. when another thread requests the GIL,
-            // it drops the GIL and waits for the GIL again
+            // this function drops the GIL and waits for the GIL again
             if (eval_frame_handle_pending(tstate) != 0) {
                 goto error;
             }
@@ -80,7 +80,7 @@ t = threading.Thread(target=f, args=(1, 2), kwargs={'c': 3})
 t.start()
 ```
 
-The `start()` method of a `Thread` instance creates a new OS thread. On Unix-like system including Linux and macOS, it calls the [pthread_create()](https://man7.org/linux/man-pages/man3/pthread_create.3.html) function for that purpose. The newly created thread starts executing the `t_bootstrap()` function with the `boot` argument. The `boot` argument is a struct that contains the target function, the passed arguments and a thread state for the new OS thread. The `t_bootstrap()` function does a number of things, but most importantly, it acquires the GIL and then enters the evaluation loop to execute the bytecode of the target function.
+The `start()` method of a `Thread` instance creates a new OS thread. On Unix-like systems including Linux and macOS, it calls the [pthread_create()](https://man7.org/linux/man-pages/man3/pthread_create.3.html) function for that purpose. The newly created thread starts executing the `t_bootstrap()` function with the `boot` argument. The [`boot`](https://github.com/python/cpython/blob/5d28bb699a305135a220a97ac52e90d9344a3004/Modules/_threadmodule.c#L1019) argument is a struct that contains the target function, the passed arguments, and a thread state for the new OS thread. The [`t_bootstrap()`](https://github.com/python/cpython/blob/5d28bb699a305135a220a97ac52e90d9344a3004/Modules/_threadmodule.c#L1029) function does a number of things, but most importantly, it acquires the GIL and then enters the evaluation loop to execute the bytecode of the target function.
 
 To acquire the GIL, a thread first checks whether some other thread holds the GIL. If this is not the case, the thread acquires the GIL immediately. Otherwise, it waits until the GIL is released. It waits for a fixed time interval called the **switch interval** (5 ms by default), and if the GIL is not released during that time, it sets the `eval_breaker` and `gil_drop_request` flags. The `eval_breaker` flag tells the GIL-holding thread to suspend bytecode execution, and `gil_drop_request` explains why. The GIL-holding thread sees the flags when it starts the next iteration of the evaluation loop and releases the GIL. It notifies the GIL-awaiting threads, and one of them acquires the GIL. It's up to the OS to decide which thread to wake up, so it may or may not be the thread that set the flags.
 
@@ -207,7 +207,7 @@ On a multi-core machine, the OS doesn't have to decide which of the two threads 
 
 Note that a thread that is forced to release the GIL waits until another thread takes it, so the I/O-bound thread acquires the GIL after one switch interval. Without this logic, the convoy effect would be even more severe.
 
-Now, how much is 5 ms? It depends on how long the I/O operations are. If a thread waits for seconds until the data on a socket becomes available for reading, extra 5 ms do not matter much. But some I/O operations are really fast. For example, [`send()`](https://man7.org/linux/man-pages/man2/send.2.html) blocks only when the send buffer is full and returns immediately otherwise. So if the I/O operations take microseconds, then milliseconds of waiting for the GIL may have a huge impact.
+Now, how much is 5 ms? It depends on how much time the I/O operations take. If a thread waits for seconds until the data on a socket becomes available for reading, extra 5 ms do not matter much. But some I/O operations are really fast. For example, [`send()`](https://man7.org/linux/man-pages/man2/send.2.html) blocks only when the send buffer is full and returns immediately otherwise. So if the I/O operations take microseconds, then milliseconds of waiting for the GIL may have a huge impact.
 
 The echo server without the CPU-bound thread handles 30k RPS, which means that a single request takes about 1/30k ≈ 30 µs. With the CPU-bound thread, `recv()` and `send()` add extra 5 ms = 5,000 µs to every request each, and a single request now takes 10,030 µs. This is about 300x more. Thus, the throughput is 300x less. The numbers match.
 
@@ -298,7 +298,7 @@ sum = 0
 
 def f():
     global sum
-    for _ in range(100):
+    for _ in range(1000):
         sum += 1
 ```
 
@@ -324,14 +324,12 @@ To remove the GIL and still have a working interpreter, you need to find alterna
 
 Gilectomy could run some Python code and run it in parallel. However, the single-threaded performance of CPython was compromised. Atomic increments and decrements alone added about 30% overhead. Hastings tried to address this by implementing buffered reference counting. In short, this technique confines all reference count updates to one special thread. Other threads only commit the increments and decrements to the log, and the special thread reads the log. This worked, but the overhead was [still significant](https://mail.python.org/archives/list/python-dev@python.org/message/YJDRVOUSRVGCZTKIL7ZUJ6ITVWZTC246/).
 
-In the end, it became evident that Gilectomy is not going to be merged into CPython. Hastings stopped working on the project. It wasn't a complete failure, though. It taught us why removing the GIL from CPython is hard. There are two main reasons:
+In the end, it [became evident](https://lwn.net/Articles/754577/) that Gilectomy is not going to be merged into CPython. Hastings stopped working on the project. It wasn't a complete failure, though. It taught us why removing the GIL from CPython is hard. There are two main reasons:
 
-1. Garbage collection based on reference counting is not suited for multithreading. The only solution is to implement a [tracing garbage collector](https://en.wikipedia.org/wiki/Tracing_garbage_collection) that can be found in the JVM, CLR, Go and other runtimes without a GIL.
+1. Garbage collection based on reference counting is not suited for multithreading. The only solution is to implement a [tracing garbage collector](https://en.wikipedia.org/wiki/Tracing_garbage_collection) that JVM, CLR, Go, and other runtimes without a GIL implement.
 2. Removing the GIL breaks existing C extensions. There is no way around it.
 
 Nowadays nobody thinks seriously about removing the GIL. Does it mean that we are to live with the GIL forever?
-
-
 
 ## The future of the GIL and Python concurrency
 
@@ -339,7 +337,7 @@ This sounds scary, but it's much more probable that CPython will have many GILs 
 
 Interpreters have been a part of CPython since version 1.5 but only as an isolation mechanism. They store data specific to a group of threads: loaded modules, builtins, import settings and so forth. They are not exposed in Python, but C extensions can use them via the Python/C API. A few actually do that, though, [`mod_wsgi`](https://modwsgi.readthedocs.io/en/develop/index.html) being a notable example.
 
-Today's interpreters are limited by the fact that they have to share the GIL. This can change only when all the global state is made per-interpreter. The work is being done in that direction, but few things remain global: some built-in types, singletons like `None`, `True` and `False`, and parts of the memory allocator. C extensions also need to get rid of the global state before they can work with subinterpreters. Victor Stinner leads this making-everything-per-interpreter endeavor and [tracks](https://pythondev.readthedocs.io/subinterpreters.html) how the progress is going on.
+Today's interpreters are limited by the fact that they have to share the GIL. This can change only when all the global state is made per-interpreter. The work is [being done](https://pythondev.readthedocs.io/subinterpreters.html) in that direction, but few things remain global: some built-in types, singletons like `None`, `True` and `False`, and parts of the memory allocator. C extensions also need to [get rid of the global state](https://www.python.org/dev/peps/pep-0630/) before they can work with subinterpreters.
 
 Eric Snow wrote [PEP 554](https://www.python.org/dev/peps/pep-0554/) that adds the `interpreters` module to the standard library. The idea is to expose the existing interpreters C API to Python and provide mechanisms of communication between interpreters. The proposal targeted Python 3.9 but was postponed until the GIL is made per-interpreter. Even then it's not guaranteed to succeed. The matter of [debate](https://mail.python.org/archives/list/python-dev@python.org/thread/3HVRFWHDMWPNR367GXBILZ4JJAUQ2STZ/) is whether Python really needs another concurrency model.
 
@@ -351,7 +349,7 @@ Faster CPython focuses on single-threaded performance. The team has no plans to 
 
 ## P.S.
 
-The benchmarks used in this post are [available on GitHub](https://github.com/r4victor/pbts13_gil). Special thanks to David Beazley for [his amazing talks](https://dabeaz.com/talks.html). To understand how modern OS schedulers work, I read Robert Love's [*Linux Kernel Development*](https://www.amazon.com/Linux-Kernel-Development-Robert-Love/dp/0672329468). Highly recommend it!
+The benchmarks used in this post are [available on GitHub](https://github.com/r4victor/pbts13_gil). Special thanks to David Beazley for [his amazing talks](https://dabeaz.com/talks.html). Larry Hastings' talks on the GIL and Gilectomy ([one](https://www.youtube.com/watch?v=KVKufdTphKs), [two](https://www.youtube.com/watch?v=P3AyI_u66Bw), [three](https://www.youtube.com/watch?v=pLqv11ScGsQ)) were also very interesting to watch. To understand how modern OS schedulers work, I've read Robert Love's book [*Linux Kernel Development*](https://www.amazon.com/Linux-Kernel-Development-Robert-Love/dp/0672329468). Highly recommend it!
 
 If you want to study the GIL in more detail, you should read the source code. The [`Python/ceval_gil.h`](https://github.com/python/cpython/blob/3.9/Python/ceval_gil.h) file is a perfect place to start. To help you with this venture, I wrote the following bonus section.
 
