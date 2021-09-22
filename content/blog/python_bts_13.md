@@ -9,7 +9,7 @@ In this post I'd like to tell you more about non-obvious effects of the GIL. Alo
 
 **Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
-## OS threads, Python threads and the GIL
+## OS threads, Python threads, and the GIL
 
 Let me first remind you what Python threads are and how multithreading works in Python. When you run the `python` executable, the OS starts a new process with one thread of execution called the main thread. As in the case of any other C program, the main thread begins executing `python` by entering its `main()` function. All the main thread does next can be summarized by three steps:
 
