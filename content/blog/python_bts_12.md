@@ -1165,7 +1165,7 @@ To sum up, concurrency is inherently hard, and no programming model can make it 
 
 The code for this post is available on [github](https://github.com/r4victor/pbts12_async_await). The post is inspired by David Beazley's [Curious Course on Coroutines and Concurrency](https://www.youtube.com/watch?v=Z_OAlIhXziw) talk and by Eli Bendersky's [Concurrent Servers](https://eli.thegreenplace.net/2017/concurrent-servers-part-1-introduction/) series.
 
-`async`/`await` completes the list of topics I wanted to cover in the Python behind the scenes series. I'm now planning to write about other interesting things, but the series is likely to get a sequel in the future. If you want to suggest a topic for the next post, you can write me an email to victor@tenthousandmeters.com.
+`async`/`await` completes the list of topics I wanted to cover in the Python behind the scenes series. I'm now planning to write about other interesting things, but the series is likely to get a sequel in the future. If you want to suggest a topic for the [next post]({filename}/blog/python_bts_13.md), you can write me an email to victor@tenthousandmeters.com.
 
 <br>
 
