@@ -1,16 +1,17 @@
 Title: Python behind the scenes #13: the GIL and its effects on Python multithreading
 Date: 2021-09-06 12:50
 Tags: Python behind the scenes, Python, CPython
+Summary: As you probably know, the GIL stands for the Global Interpreter Lock, and its job is to make the CPython interpreter thread-safe. The GIL allows only one OS thread to execute Python bytecode at any given time, and the consequence of this is that it's not possible to speed up CPU-intensive Python code by distributing the work among multiple threads. This is, however, not the only negative effect of the GIL. The GIL introduces overhead that makes multi-threaded programs slower, and what is more surprising, it can even have an impact I/O-bound threads.<br><br>In this post I'd like to tell you more about non-obvious effects of the GIL. Along the way, we'll discuss what the GIL really is, why it exists, how it works, and how it's going to affect Python concurrency in the future.
 
 As you probably know, the GIL stands for the Global Interpreter Lock, and its job is to make the CPython interpreter thread-safe. The GIL allows only one OS thread to execute Python bytecode at any given time, and the consequence of this is that it's not possible to speed up CPU-intensive Python code by distributing the work among multiple threads. This is, however, not the only negative effect of the GIL. The GIL introduces overhead that makes multi-threaded programs slower, and what is more surprising, it can even have an impact I/O-bound threads.
 
-In this post I'd like to tell you more about the non-obvious effects of the GIL. Along the way, we'll discuss what the GIL really is, why it exists, how it works, and how it's going to affect Python concurrency in the future.
+In this post I'd like to tell you more about non-obvious effects of the GIL. Along the way, we'll discuss what the GIL really is, why it exists, how it works, and how it's going to affect Python concurrency in the future.
 
 **Note**: In this post I'm referring to CPython 3.9. Some implementation details will certainly change as CPython evolves. I'll try to keep track of important changes and add update notes.
 
 ## OS threads, Python threads and the GIL
 
-Let me first remind you what Python threads are and how multithreading works in Python. When you run the `python` executable, the OS starts a new process with one thread of execution called the main thread. As in the case of any other C program, the main thread begins executing `python` by entering its `main()` function. All the main thread does next can be summarised by three steps:
+Let me first remind you what Python threads are and how multithreading works in Python. When you run the `python` executable, the OS starts a new process with one thread of execution called the main thread. As in the case of any other C program, the main thread begins executing `python` by entering its `main()` function. All the main thread does next can be summarized by three steps:
 
 1. [initialize the interpreter]({filename}/blog/python_bts_03.md);
 2. [compile Python code to bytecode]({filename}/blog/python_bts_02.md);
@@ -160,7 +161,7 @@ if __name__ == '__main__':
     run_server()
 ```
 
-How many requests per second can this sever handle? I wrote a simple client program that just sends and receives 1-byte messages to the server as fast as it can and got something about 30k RPS. This is most probably not an accurate measure since the client and the server run on the same machine, but that's not the point. The point is to see how the RPS drops when the server performs some CPU-bound task in a separate thread.
+How many requests per second can this sever handle? I wrote a [simple client program](https://github.com/r4victor/pbts13_gil/blob/master/effect2_client.py) that just sends and receives 1-byte messages to the server as fast as it can and got something about 30k RPS. This is most probably not an accurate measure since the client and the server run on the same machine, but that's not the point. The point is to see how the RPS drops when the server performs some CPU-bound task in a separate thread.
 
 Consider the exact same server but with an additional dummy thread that increments and decrements a variable in an infinite loop (any CPU-bound task will do just the same):
 
@@ -206,13 +207,13 @@ On a multi-core machine, the OS doesn't have to decide which of the two threads 
 
 Note that a thread that is forced to release the GIL waits until another thread takes it, so the I/O-bound thread acquires the GIL after one switch interval. Without this logic, the convoy effect would be even more severe.
 
-Now, how much is 5 ms? It depends on how much the I/O operations take. If a thread waits for seconds until the data on the socket becomes available for reading, extra 5 ms do not matter much. But some I/O operations are really fast. For example, [`send()`](https://man7.org/linux/man-pages/man2/send.2.html) blocks only when the send buffer is full and returns immediately otherwise. So if the I/O operations take microseconds, then milliseconds of waiting for the GIL may have a huge impact.
+Now, how much is 5 ms? It depends on how long the I/O operations are. If a thread waits for seconds until the data on a socket becomes available for reading, extra 5 ms do not matter much. But some I/O operations are really fast. For example, [`send()`](https://man7.org/linux/man-pages/man2/send.2.html) blocks only when the send buffer is full and returns immediately otherwise. So if the I/O operations take microseconds, then milliseconds of waiting for the GIL may have a huge impact.
 
 The echo server without the CPU-bound thread handles 30k RPS, which means that a single request takes about 1/30k ≈ 30 µs. With the CPU-bound thread, `recv()` and `send()` add extra 5 ms = 5,000 µs to every request each, and a single request now takes 10,030 µs. This is about 300x more. Thus, the throughput is 300x less. The numbers match.
 
 You may ask: Is the convoy effect a problem in real-world applications? I don't know. I never ran into it, nor could I find evidence that anyone else did. People do not complain, and this is part of the reason why the issue hasn't been fixed.
 
-But what if the convoy effect does cause performance problems in your application? There are two ways you can fix it.
+But what if the convoy effect does cause performance problems in your application? Here are two ways to fix it.
 
 ## Fixing the convoy effect
 
@@ -247,7 +248,9 @@ Smaller switch intervals make I/O-bound threads more responsive. But too small s
 | 0.00001                    | 6.68                             | 12.29                            | 19.15                            | 30.53                            |
 | 0.000001                   | 6.89                             | 17.16                            | 31.68                            | 86.44                            |
 
-Again, the switch interval doesn't matter if there is only one thread. Also, the number of threads doesn't matter if the switch interval is large enough. A small switch interval and several threads is when you get poor performance. The conclusion is that changing the switch interval is an option for fixing the convoy effect, but you should be careful to measure how the change affects your application.
+Again, the switch interval doesn't matter if there is only one thread. Also, the number of threads doesn't matter if the switch interval is large enough. A small switch interval and several threads is when you get poor performance.
+
+The conclusion is that changing the switch interval is an option for fixing the convoy effect, but you should be careful to measure how the change affects your application.
 
 The second way to fix the convoy effect is even more hacky. Since the problem is much less severe on single-core machines, we could try to restrict all Python threads to a single-core. This would force the OS to choose which thread to schedule, and the I/O-bound thread would have the priority.
 
@@ -259,7 +262,7 @@ Not every OS provides a way to restrict a group of threads to certain cores. As 
 | :-------------------------- | ---- | ---- | ---- | ---- | ---- |
 | RPS                         | 24k  | 12k  | 3k   | 30   | 10   |
 
-The server can tolerate one CPU-bound thread quite well. But since the I/O-bound thread needs to compete with other threads for the GIL, as we add more threads, the performance drops massively. The fix is more of a hack. Why don't CPython developers just implement a proper GIL?
+The server can tolerate one CPU-bound thread quite well. But since the I/O-bound thread needs to compete with all CPU-bound threads for the GIL, as we add more threads, the performance drops massively. The fix is more of a hack. Why don't CPython developers just implement a proper GIL?
 
 ## A proper GIL
 
@@ -323,7 +326,7 @@ Gilectomy could run some Python code and run it in parallel. However, the single
 
 In the end, it became evident that Gilectomy is not going to be merged into CPython. Hastings stopped working on the project. It wasn't a complete failure, though. It taught us why removing the GIL from CPython is hard. There are two main reasons:
 
-1. Garbage collection based on reference counting is not suited for multithreading. The only solution is to implement a [tracing garbage collector](https://en.wikipedia.org/wiki/Tracing_garbage_collection) like the JVM, CLR, Go and other runtimes without a GIL do.
+1. Garbage collection based on reference counting is not suited for multithreading. The only solution is to implement a [tracing garbage collector](https://en.wikipedia.org/wiki/Tracing_garbage_collection) that can be found in the JVM, CLR, Go and other runtimes without a GIL.
 2. Removing the GIL breaks existing C extensions. There is no way around it.
 
 Nowadays nobody thinks seriously about removing the GIL. Does it mean that we are to live with the GIL forever?
@@ -332,19 +335,23 @@ Nowadays nobody thinks seriously about removing the GIL. Does it mean that we ar
 
 ## The future of the GIL and Python concurrency
 
-This sounds scary, but it's much more probable that CPython will have many GILs than no GIL at all. Literally, there is an initiative to introduce multiple GILs to CPython. It's called subinterpreters. The idea is to have multiple interpreters within the same process. Threads within one interpreter still share the GIL, but multiple interpreters can run parallel. No GIL is needed to synchronize interpreters because they have no common global state and do not share Python objects. All global state is made per-interpreter, and interpreters communicate via message passing only. The ultimate goal is to introduce to Python a concurrency model based on communicating sequential processes that languages like Go and Clojure already have.
+This sounds scary, but it's much more probable that CPython will have many GILs than no GIL at all. Literally, there is an initiative to introduce multiple GILs to CPython. It's called subinterpreters. The idea is to have multiple interpreters within the same process. Threads within one interpreter still share the GIL, but multiple interpreters can run parallel. No GIL is needed to synchronize interpreters because they have no common global state and do not share Python objects. All global state is made per-interpreter, and interpreters communicate via message passing only. The ultimate goal is to introduce to Python a concurrency model based on communicating sequential processes found in languages like Go and Clojure.
 
-Interpreters have been a part of CPython as an isolation mechanism since version 1.5. They store data specific to a group of threads: loaded modules, builtins, import settings and so forth. They are not exposed in Python, but C extensions can use them via the Python/C API. A few actually do that, though, [`mod_wsgi`](https://modwsgi.readthedocs.io/en/develop/index.html) being a notable example.
+Interpreters have been a part of CPython since version 1.5 but only as an isolation mechanism. They store data specific to a group of threads: loaded modules, builtins, import settings and so forth. They are not exposed in Python, but C extensions can use them via the Python/C API. A few actually do that, though, [`mod_wsgi`](https://modwsgi.readthedocs.io/en/develop/index.html) being a notable example.
 
-Today's interpreters are limited by the fact that they have to share the GIL. This can change only when all the global state is made per-interpreter. The work is being done in that direction, but few things remain global: some built-in types, singletons like `None`, `True` and `False`, and parts of the memory allocator. C extensions also need to get rid of the global state before they can work with subinterpreters. Victor Stinner leads this making-everything-per-interpreter endeavour and [tracks](https://pythondev.readthedocs.io/subinterpreters.html) how the progress is going on.
+Today's interpreters are limited by the fact that they have to share the GIL. This can change only when all the global state is made per-interpreter. The work is being done in that direction, but few things remain global: some built-in types, singletons like `None`, `True` and `False`, and parts of the memory allocator. C extensions also need to get rid of the global state before they can work with subinterpreters. Victor Stinner leads this making-everything-per-interpreter endeavor and [tracks](https://pythondev.readthedocs.io/subinterpreters.html) how the progress is going on.
 
 Eric Snow wrote [PEP 554](https://www.python.org/dev/peps/pep-0554/) that adds the `interpreters` module to the standard library. The idea is to expose the existing interpreters C API to Python and provide mechanisms of communication between interpreters. The proposal targeted Python 3.9 but was postponed until the GIL is made per-interpreter. Even then it's not guaranteed to succeed. The matter of [debate](https://mail.python.org/archives/list/python-dev@python.org/thread/3HVRFWHDMWPNR367GXBILZ4JJAUQ2STZ/) is whether Python really needs another concurrency model.
 
 Another exciting project that's going on nowadays is [Faster CPython](https://github.com/faster-cpython). In October 2020, Mark Shannon proposed a [plan](https://github.com/markshannon/faster-cpython) to make CPython ≈5x faster over several years. And it's actually much more realistic than it may sound because CPython has a lot of potential for optimization. The addition of JIT alone can result in an enormous performance boost.
 
-There were similar projects before, but they failed because they required a lot of work but lacked proper funding or expertise. This time, Microsoft [volunteered](https://lwn.net/Articles/857754/) to sponsor Faster CPython and let Mark Shannon, Guido van Rossum, and Eric Snow work on the project. The incremental changes already go to CPython – they do not stale in a fork.
+There were similar projects before, but they failed because they lacked proper funding or expertise. This time, Microsoft [volunteered](https://lwn.net/Articles/857754/) to sponsor Faster CPython and let Mark Shannon, Guido van Rossum, and Eric Snow work on the project. The incremental changes already go to CPython – they do not stale in a fork.
 
 Faster CPython focuses on single-threaded performance. The team has no plans to change or remove the GIL. Nevertheless, if the project succeeds, one of the Python's major pain points will be fixed, and the GIL question may become more relevant than ever.
+
+## P.S.
+
+The benchmarks used in this post are [available on GitHub](https://github.com/r4victor/pbts13_gil). Special thanks to David Beazley for [his amazing talks](https://dabeaz.com/talks.html). To understand how modern OS schedulers work, I read Robert Love's [*Linux Kernel Development*](https://www.amazon.com/Linux-Kernel-Development-Robert-Love/dp/0672329468). Highly recommend it!
 
 If you want to study the GIL in more detail, you should read the source code. The [`Python/ceval_gil.h`](https://github.com/python/cpython/blob/3.9/Python/ceval_gil.h) file is a perfect place to start. To help you with this venture, I wrote the following bonus section.
 
@@ -531,10 +538,6 @@ Finally, here's the steps of [`drop_gil()`](https://github.com/python/cpython/bl
 
 Note that the GIL-releasing thread doesn't need to wait for a condition in a loop. It calls `pthread_cond_wait(&gil->switch_cond, &gil->switch_mutex)` only to ensure that it doesn't reacquire the GIL immediately. If the switch occurred, this means that another thread took the GIL, and it's fine to compete for the GIL again.
 
-That's it!
-
 <br>
 
 *If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
-
-<br>
