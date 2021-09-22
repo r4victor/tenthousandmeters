@@ -1,5 +1,5 @@
 Title: Python behind the scenes #13: the GIL and its effects on Python multithreading
-Date: 2021-09-06 12:50
+Date: 2021-09-22 8:55
 Tags: Python behind the scenes, Python, CPython
 Summary: As you probably know, the GIL stands for the Global Interpreter Lock, and its job is to make the CPython interpreter thread-safe. The GIL allows only one OS thread to execute Python bytecode at any given time, and the consequence of this is that it's not possible to speed up CPU-intensive Python code by distributing the work among multiple threads. This is, however, not the only negative effect of the GIL. The GIL introduces overhead that makes multi-threaded programs slower, and what is more surprising, it can even have an impact I/O-bound threads.<br><br>In this post I'd like to tell you more about non-obvious effects of the GIL. Along the way, we'll discuss what the GIL really is, why it exists, how it works, and how it's going to affect Python concurrency in the future.
 
