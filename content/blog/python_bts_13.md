@@ -550,7 +550,7 @@ In the echo server example, effectively every `recv()` is blocking – the serve
 
 Also, you don't need to modify the CPython source code or mess with `ctypes` to restrict Python threads to certain cores. In Linux, the `pthread_setaffinity_np()` function is implemented on top of the [`sched_setaffinity()`](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html) syscall, and the `os` standard module [exposes](https://docs.python.org/3/library/os.html#os.sched_setaffinity) this syscall to Python.
 
-There is also the [`taskset`](https://man7.org/linux/man-pages/man1/taskset.1.html) command that allows you to set the CPU affinity of the process without touching the source code at all. Just run the program like this:
+There is also the [`taskset`](https://man7.org/linux/man-pages/man1/taskset.1.html) command that allows you to set the CPU affinity of a process without touching the source code at all. Just run the program like this:
 
 ```text
 $ taskset -c {cpu_list} python program.py
