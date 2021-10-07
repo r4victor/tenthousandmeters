@@ -264,6 +264,8 @@ Not every OS provides a way to restrict a group of threads to certain cores. As 
 
 The server can tolerate one CPU-bound thread quite well. But since the I/O-bound thread needs to compete with all CPU-bound threads for the GIL, as we add more threads, the performance drops massively. The fix is more of a hack. Why don't CPython developers just implement a proper GIL?
 
+**Update from October 7, 2021**: I've now learned that restricting threads to one core helps with the convoy effect only when the client is restricted to the same core, which is how I set up the benchmark. See [the notes](#footnote1) for details.
+
 ## A proper GIL
 
 The fundamental problem with the GIL is that it interferes with the OS scheduler. Ideally, you would like to run an I/O-bound thread as soon the I/O operation it waits for completes. And that's what the OS scheduler usually does. In CPython, however, the thread then immediately gets stuck waiting for the GIL, so the OS scheduler's decision doesn't really mean anything. You may try to get rid of the switch interval so that a thread that wants the GIL gets it without delay, but then you have a problem with CPU-bound threads because they want the GIL all the time.
@@ -539,3 +541,19 @@ Note that the GIL-releasing thread doesn't need to wait for a condition in a loo
 <br>
 
 *If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+
+<br>
+
+**Update from October 7, 2021**: <span id="footnote1">[1]</span> Restricting threads to one core doesn't really fix the convoy effect. Yes, it forces the OS to choose which of the two threads to schedule, which gives the I/O-bound thread a good chance to reacquire the GIL on an I/O-operation, but if the I/O-operation is blocking, it doesn't help. In this case the I/O-bound thread is not ready for scheduling, so the OS schedules the CPU-bound thread.
+
+In the echo server example, effectively every `recv()` is blocking – the server waits for the client to read the response and send the next message. Restricting threads to one core should not help. But we saw the RPS improved. Why is that? It's because the benchmark is flawed. I ran the client on the same machine and on the same core as the server threads. Such a setup forces the OS to choose between the server's CPU-bound thread and the client thread when the server's I/O-bound thread blocks on `recv()`. The client thread is more likely to be scheduled. It sends the next message and blocks on `recv()` too. But now the server's I/O-bound thread is ready and competes with the CPU-bound thread. Basically, running client on same core core, makes the OS to choose between the I/O-bound thread and the CPU-bound thread even on blocking `recv()`.
+
+Also, you don't need to modify the CPython source code or mess with `ctypes` to restrict Python threads to certain cores. In Linux, the `pthread_setaffinity_np()` function is implemented on top of the [`sched_setaffinity()`](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html) syscall, and the `os` standard module [exposes](https://docs.python.org/3/library/os.html#os.sched_setaffinity) this syscall to Python.
+
+There is also the [`taskset`](https://man7.org/linux/man-pages/man1/taskset.1.html) command that allows you to set the CPU affinity of the process without touching the source code at all. Just run the program like this:
+
+```text
+$ taskset -c {cpu_list} python program.py
+```
+
+<br>
