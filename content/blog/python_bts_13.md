@@ -548,7 +548,7 @@ Note that the GIL-releasing thread doesn't need to wait for a condition in a loo
 
 In the echo server example, effectively every `recv()` is blocking – the server waits for the client to read the response and send the next message. Restricting threads to one core should not help. But we saw the RPS improved. Why is that? It's because the benchmark is flawed. I ran the client on the same machine and on the same core as the server threads. Such a setup forces the OS to choose between the server's CPU-bound thread and the client thread when the server's I/O-bound thread blocks on `recv()`. The client thread is more likely to be scheduled. It sends the next message and blocks on `recv()` too. But now the server's I/O-bound thread is ready and competes with the CPU-bound thread. Basically, running client on same core core, makes the OS to choose between the I/O-bound thread and the CPU-bound thread even on blocking `recv()`.
 
-Also, you don't need to modify the CPython source code or mess with `ctypes` to restrict Python threads to certain cores. In Linux, the `pthread_setaffinity_np()` function is implemented on top of the [`sched_setaffinity()`](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html) syscall, and the `os` standard module [exposes](https://docs.python.org/3/library/os.html#os.sched_setaffinity) this syscall to Python.
+Also, you don't need to modify the CPython source code or mess with `ctypes` to restrict Python threads to certain cores. In Linux, the `pthread_setaffinity_np()` function is implemented on top of the [`sched_setaffinity()`](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html) syscall, and the `os` standard module [exposes](https://docs.python.org/3/library/os.html#os.sched_setaffinity) this syscall to Python. Thanks to Carl Bordum Hansen for pointing this out to me.
 
 There is also the [`taskset`](https://man7.org/linux/man-pages/man1/taskset.1.html) command that allows you to set the CPU affinity of a process without touching the source code at all. Just run the program like this:
 
@@ -557,3 +557,4 @@ $ taskset -c {cpu_list} python program.py
 ```
 
 <br>
+
