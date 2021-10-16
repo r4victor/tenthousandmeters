@@ -10,7 +10,7 @@ SITENAME = 'Ten thousand meters'
 SITESUBTITLE = 'Diving deep, flying high to see why'
 SITEURL = os.getenv('SITEURL', '')
 
-TIMEZONE = 'Europe/London'
+TIMEZONE = 'UTC'
 
 DEFAULT_LANG = 'en'
 
