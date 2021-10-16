@@ -322,7 +322,7 @@ To sum up, what the GIL does is make the following thread-safe:
 
 4. C extensions.
 
-To remove the GIL and still have a working interpreter, you need to find alternative mechanisms for thread-safety. People tried to do that in the past. The most notable attempt was Larry Hastings' Gilectomy project started in 2016. Hastings [forked](https://github.com/larryhastings/gilectomy) CPython, [removed](https://github.com/larryhastings/gilectomy/commit/4a1a4ff49e34b9705608cad968f467af161dcf02) the GIL, modified reference counting to use [atomic](https://gcc.gnu.org/onlinedocs/gcc-4.1.1/gcc/Atomic-Builtins.html) increments and decrements, and put a lot of fine-grained locks to protect mutable data structures and interpreter-wide data.
+To remove the GIL and still have a working interpreter, you need to find alternative mechanisms for thread safety. People tried to do that in the past. The most notable attempt was Larry Hastings' Gilectomy project started in 2016. Hastings [forked](https://github.com/larryhastings/gilectomy) CPython, [removed](https://github.com/larryhastings/gilectomy/commit/4a1a4ff49e34b9705608cad968f467af161dcf02) the GIL, modified reference counting to use [atomic](https://gcc.gnu.org/onlinedocs/gcc-4.1.1/gcc/Atomic-Builtins.html) increments and decrements, and put a lot of fine-grained locks to protect mutable data structures and interpreter-wide data.
 
 Gilectomy could run some Python code and run it in parallel. However, the single-threaded performance of CPython was compromised. Atomic increments and decrements alone added about 30% overhead. Hastings tried to address this by implementing buffered reference counting. In short, this technique confines all reference count updates to one special thread. Other threads only commit the increments and decrements to the log, and the special thread reads the log. This worked, but the overhead was [still significant](https://mail.python.org/archives/list/python-dev@python.org/message/YJDRVOUSRVGCZTKIL7ZUJ6ITVWZTC246/).
 
@@ -555,6 +555,12 @@ There is also the [`taskset`](https://man7.org/linux/man-pages/man1/taskset.1.ht
 ```text
 $ taskset -c {cpu_list} python program.py
 ```
+
+<br>
+
+**Update from October 16, 2021**: Sam Gross recently [announced](https://mail.python.org/archives/list/python-dev@python.org/thread/ABR2L6BENNA6UPSPKV474HCS4LWT26GY/) his CPython fork that removes the GIL. You can think of this project as Gilectomy 2.0: it replaces the GIL with alternative mechanisms for thread safety but, unlike Gilectomy, doesn't make single-threaded code much slower. In fact, Gross optimized the interpreter so that the single-threaded performance of the fork without the GIL became even faster than mainline CPython 3.9.
+
+This project looks like the most promising attempt to remove the GIL from CPython. I'm sure some ideas proposed by Gross will find their way upstream. To learn more about the project and the ideas behind it, see the [design document](https://docs.google.com/document/d/18CXhDb1ygxg-YXNBJNzfzZsDFosB5e6BfnXLlejd9l0/) and the [GitHub repo](https://github.com/colesbury/nogil). These is also a [nice writeup on LWN](https://lwn.net/SubscriberLink/872869/0e62bba2db51ec7a/).
 
 <br>
 
