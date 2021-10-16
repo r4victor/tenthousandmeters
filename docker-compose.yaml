@@ -1,7 +1,7 @@
 version: '3'
 services:
     nginx:
-        image: umputun/nginx-le:latest
+        image: umputun/nginx-le:v1.4.2
         hostname: nginx
         container_name: nginx
         logging:
@@ -10,8 +10,8 @@ services:
               max-size: '10m'
               max-file: '5'
         volumes:
-            - ./etc/ssl:/etc/nginx/ssl
-            - ./etc/nginx-dev.conf:/etc/nginx/service.conf
+            - ./nginx/etc/ssl:/etc/nginx/ssl
+            - ./nginx/etc/nginx-dev.conf:/etc/nginx/service.conf
             - ./output:/projects/ttm
         ports:
             - 80:80

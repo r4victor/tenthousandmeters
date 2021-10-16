@@ -8,5 +8,5 @@
 
 # project specific
 
-/etc/ssl/
+nginx/etc/ssl/
 /output/

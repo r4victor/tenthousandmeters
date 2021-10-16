@@ -67,6 +67,8 @@ CATEGORY_SAVE_AS = ''
 DRAFT_SAVE_AS = 'drafts/{slug}.html'
 DRAFT_URL = 'drafts/{slug}/'
 
+OUTPUT_PATH = '../output/'
+
 PAGE_PATHS = ('pages', 'materials')
 PAGE_SAVE_AS = '{slug}.html'
 PAGE_URL = '{slug}/'

@@ -3,7 +3,7 @@ services:
     nginx:
         restart: always
         volumes:
-            - ./etc/nginx.conf:/etc/nginx/service.conf
+            - ./nginx/etc/nginx.conf:/etc/nginx/service.conf
         ports:
             - 80:80
             - 443:443
