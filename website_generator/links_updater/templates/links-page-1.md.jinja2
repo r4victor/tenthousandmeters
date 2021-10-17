@@ -2,13 +2,19 @@ Title: links
 Save_as: links/page-{{ page_num }}.html
 Url: links/page-{{ page_num }}/
 
+This page aggregates links from blogs that I follow. In other words, it's a public version of my RSS reader. I look for high-quality posts that I can learn from or that are just fun to read. That's what you'll find here. The topics are mostly technical: programming and math, but other topics may pop up too.
+
+If you know of a blog that I may like, please tell me: victor@tenthousandmeters.com
+
+The links are updated automatically every hour or so.
+
+<br>
+
 {% for date, links in link_groups.items() %}
 {{ date }}
-<ol start="{{ links[0].num }}">
 {% for link in links %}
-<li><a href="{{ link.url }}">{{ link.title }}</a> ({{ link.domain }})</li>
+* <a href="{{ link.url }}">{{ link.title }}</a> ({{ link.domain }})
 {% endfor %}
-</ol>
 {% endfor %}
 
 <br>

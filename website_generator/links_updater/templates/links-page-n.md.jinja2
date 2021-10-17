@@ -8,11 +8,9 @@ Page {{ page_num }} of {{ pages_total }}: {% if prev %}[prev]({{ prev }}){% endi
 
 {% for date, links in link_groups.items() %}
 {{ date }}
-<ol start="{{ links[0].num }}">
 {% for link in links %}
-<li><a href="{{ link.url }}">{{ link.title }}</a> ({{ link.domain }})</li>
+* <a href="{{ link.url }}">{{ link.title }}</a> ({{ link.domain }})
 {% endfor %}
-</ol>
 {% endfor %}
 
 <br>

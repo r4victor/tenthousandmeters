@@ -1,3 +1,4 @@
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import itertools
@@ -16,13 +17,17 @@ LINKS_DIR = os.path.join(PARENT_DIR, 'content', 'links')
 FEEDS_FILE = 'feeds.json'
 
 TEMPLATES_DIR = os.path.join(BASE_DIR, 'templates')
-JINJA_ENV = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
+JINJA_ENV = Environment(
+    loader=FileSystemLoader(TEMPLATES_DIR),
+    autoescape=True
+)
 
 
 def update_links():
     feeds_urls = get_feeds_urls()
     feeds = get_feeds(feeds_urls)
-    update_links_from_feeds(feeds)
+    rendered_pages = render_pages_from_feeds(feeds)
+    write_pages(rendered_pages)
 
 
 def get_feeds_urls():
@@ -31,17 +36,18 @@ def get_feeds_urls():
 
 
 def get_feeds(feeds_urls):
-    return [get_feed(feed_url) for feed_url in feeds_urls]
+    with ThreadPoolExecutor(100) as p:
+        return list(p.map(get_feed, feeds_urls))
 
 
 def get_feed(feed_url):
     return requests.get(feed_url).text
 
 
-def update_links_from_feeds(feeds):
+def render_pages_from_feeds(feeds):
     links = get_links(feeds)
     pages = get_pages(links)
-    publish_pages(pages)
+    return render_pages(pages)
 
 
 def get_links(feeds):
@@ -51,7 +57,8 @@ def get_links(feeds):
 def get_links_from_feed(feed):
     feed_dict = feedparser.parse(feed)
     domain = get_domain(feed_dict.feed.link)
-    return [get_link_from_feed_entry(domain, e) for e in feed_dict.entries]
+    links = [get_link_from_feed_entry(domain, e) for e in feed_dict.entries]
+    return filter_bad_links(links)
 
 
 def get_domain(url):
@@ -59,15 +66,11 @@ def get_domain(url):
 
 
 def get_link_from_feed_entry(source_domain, feed_entry):
-    published = feed_entry.updated_parsed
-    if 'published' in feed_entry:
-        published = feed_entry.published_parsed
-
     return {
         'domain': source_domain,
         'title': feed_entry.title,
         'url': feed_entry.link,
-        'published': struct_time_to_datetime(published)
+        'published': get_published_date(feed_entry)
     }
 
 
@@ -81,6 +84,22 @@ def get_published_date(feed_entry):
 
 def struct_time_to_datetime(struct_time):
     return datetime.datetime(*struct_time[:5])
+
+
+def filter_bad_links(links):
+    """
+    Get rid of bad links (e.g. titles are too long).
+    Jinja will take care of autoescaping html.
+    """
+    return [link for link in links if verify_link(link)]
+
+
+def verify_link(link, max_title_len=200, max_domain_len=200):
+    if not 1 <= len(link['domain']) <= max_domain_len:
+        return False
+    if not 1 <= len(link['title']) <= max_title_len:
+        return False
+    return True
 
 
 def get_pages(links):
@@ -111,15 +130,12 @@ def group_links_by_date(links):
     return {date.strftime('%B %-d, %-Y'): list(g) for date, g in groups}
 
 
-def publish_pages(pages):
-    if not os.path.exists(LINKS_DIR):
-        os.makedirs(LINKS_DIR)
+def render_pages(pages):
     now = datetime.datetime.utcnow()
-
+    rendered_pages = []
     for i, link_groups in enumerate(pages, start=1):
-        content = render_page(i, link_groups, pages, now)
-        with open(os.path.join(LINKS_DIR, f'page-{i}.md'), 'w+') as f:
-            f.write(content)
+        rendered_pages.append(render_page(i, link_groups, pages, now))
+    return rendered_pages
 
 
 def render_page(page_num, link_groups, pages, updated):
@@ -143,6 +159,15 @@ def render_page(page_num, link_groups, pages, updated):
         'next': next,
         'updated': f'{updated:%Y-%m-%d %H:%M} UTC',
     })
+
+
+def write_pages(rendered_pages):
+    if not os.path.exists(LINKS_DIR):
+        os.mkdir(LINKS_DIR)
+
+    for i, rendered_page in enumerate(rendered_pages, start=1):
+        with open(os.path.join(LINKS_DIR, f'page-{i}.md'), 'w+') as f:
+            f.write(rendered_page)
 
 
 if __name__ == '__main__':
