@@ -10,3 +10,4 @@
 
 nginx/etc/ssl/
 /output/
+/website_generator/content/links

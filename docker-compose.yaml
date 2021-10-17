@@ -18,3 +18,16 @@ services:
         environment:
             - TZ=UTC
             - LETSENCRYPT=false
+    website_generator:
+        build: ./website_generator
+        image: website_generator
+        container_name: website_generator
+        logging:
+          driver: json-file
+          options:
+              max-size: '10m'
+              max-file: '5'
+        volumes:
+            - ./website_generator/content/links:/ttm/website_generator/content/links
+            - ./output/links:/ttm/output/links
+            - ./website_generator/links_updater/feeds.json:/ttm/website_generator/links_updater/feeds.json

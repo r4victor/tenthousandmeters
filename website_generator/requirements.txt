@@ -1,0 +1,6 @@
+pelican[markdown]==4.7.1
+
+# links_updater
+feedparser==6.0.8
+Jinja2==2.11.3
+requests==2.26.0

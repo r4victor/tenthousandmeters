@@ -11,3 +11,6 @@ services:
             - LETSENCRYPT=true
             - LE_EMAIL=victor@tenthousandmeters.com
             - LE_FQDN=tenthousandmeters.com
+    website_generator:
+        environment:
+            - SITEURL=https://tenthousandmeters.com

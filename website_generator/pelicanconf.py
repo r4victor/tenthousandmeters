@@ -33,7 +33,7 @@ GOOGLE_ANALYTICS = 'UA-65327549-5'
 
 PATH = 'content'
 
-DELETE_OUTPUT_DIRECTORY = True
+DELETE_OUTPUT_DIRECTORY = False
 
 PLUGINS = ['plugins.pelican_plugin-render_math.render_math']
 
@@ -47,6 +47,7 @@ DISPLAY_PAGES_ON_MENU = False
 MENUITEMS = [
     ('about', '/about/'),
     ('blog', '/'),
+    ('links', '/links/page-1/'),
     ('materials', '/materials/'),
 ]
 
@@ -69,7 +70,7 @@ DRAFT_URL = 'drafts/{slug}/'
 
 OUTPUT_PATH = '../output/'
 
-PAGE_PATHS = ('pages', 'materials')
+PAGE_PATHS = ('pages', 'materials', 'links')
 PAGE_SAVE_AS = '{slug}.html'
 PAGE_URL = '{slug}/'
 

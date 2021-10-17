@@ -1,0 +1,24 @@
+Title: links (page {{ page_num }})
+Save_as: links/page-{{ page_num }}.html
+Url: links/page-{{ page_num }}/
+
+Page {{ page_num }} of {{ pages_total }}: {% if prev %}[prev]({{ prev }}){% endif %} {% if next %}[next]({{ next }}){% endif %}
+
+<br>
+
+{% for date, links in link_groups.items() %}
+{{ date }}
+<ol start="{{ links[0].num }}">
+{% for link in links %}
+<li><a href="{{ link.url }}">{{ link.title }}</a> ({{ link.domain }})</li>
+{% endfor %}
+</ol>
+{% endfor %}
+
+<br>
+
+Page {{ page_num }} of {{ pages_total }}: {% if prev %}[prev]({{ prev }}){% endif %} {% if next %}[next]({{ next }}){% endif %}
+
+<br>
+
+*Last updated: {{ updated }}*
