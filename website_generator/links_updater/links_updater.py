@@ -1,8 +1,8 @@
-import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import itertools
 import json
+import logging
 import os
 import urllib.parse
 
@@ -37,11 +37,17 @@ def get_feeds_urls():
 
 def get_feeds(feeds_urls):
     with ThreadPoolExecutor(100) as p:
-        return list(p.map(get_feed, feeds_urls))
+        feeds = p.map(get_feed, feeds_urls)
+    return [feed for feed in feeds if feed is not None]
 
 
 def get_feed(feed_url):
-    return requests.get(feed_url).text
+    try:
+        response = requests.get(feed_url)
+    except requests.exceptions.RequestException:
+        logging.warning(f'Cannot get feed: {feed_url}')
+        return None
+    return response.text
 
 
 def render_pages_from_feeds(feeds):
@@ -56,9 +62,45 @@ def get_links(feeds):
 
 def get_links_from_feed(feed):
     feed_dict = feedparser.parse(feed)
+
+    if feed_dict.bozo:
+        # Handles only bad-formed XML.
+        # We handle incomplete feeds ourselves.
+        logging.warning(f'Invalid feed: {feed}\n{feed_dict.bozo_exception}')
+        return []
+    if not valid_feed(feed_dict):
+        return []
+
     domain = get_domain(feed_dict.feed.link)
     links = [get_link_from_feed_entry(domain, e) for e in feed_dict.entries]
     return filter_bad_links(links)
+
+
+def valid_feed(feed_dict):
+    if 'link' not in feed_dict.feed:
+        logging.warning(f'Feed has no "link" attribute: {feed_dict}')
+        return False
+    if not all(valid_entry(entry) for entry in feed_dict.entries):
+        return False
+    return True
+
+
+def valid_entry(feed_entry):
+    for k in ('title', 'link'):
+        if k not in feed_entry:
+            logging.warning(
+                f'Feed entry missing "{k}" attribute: {feed_entry}'
+            )
+            return False
+    if 'updated' not in feed_entry:
+        # 'updated' is required but we tolerate it if 'published' is present
+        if 'published' not in feed_entry:
+            logging.warning(
+                'Feed entry missing both '
+                f'"updated" and "published": {feed_entry}'
+            )
+
+    return True
 
 
 def get_domain(url):
@@ -75,7 +117,9 @@ def get_link_from_feed_entry(source_domain, feed_entry):
 
 
 def get_published_date(feed_entry):
-    published = feed_entry.updated_parsed
+    # https://feedparser.readthedocs.io/en/latest/reference-entry-updated_parsed.html
+    if 'updated' in feed_entry:
+        published = feed_entry.updated_parsed
     if 'published' in feed_entry:
         published = feed_entry.published_parsed
 
@@ -96,8 +140,10 @@ def filter_bad_links(links):
 
 def verify_link(link, max_title_len=200, max_domain_len=200):
     if not 1 <= len(link['domain']) <= max_domain_len:
+        logging.warning(f'Bad "domain" length: {link}')
         return False
     if not 1 <= len(link['title']) <= max_title_len:
+        logging.warning(f'Bad "title" length: {link}')
         return False
     return True
 

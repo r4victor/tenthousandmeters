@@ -24,23 +24,63 @@ def sample_feeds():
     return feeds
 
 
-@pytest.fixture
+def load_feed(filename):
+    filepath = os.path.join(BASE_DIR, SAMPLE_FEEDS_DIR, filename)
+    with open(filepath) as f:
+        return f.read()
+
+
+@pytest.fixture(scope='session')
 def atom_feed():
-    filename = 'atom1.0.xml'
-    filepath = os.path.join(BASE_DIR, SAMPLE_FEEDS_DIR, filename)
-    with open(filepath) as f:
-        return f.read()
+    return load_feed('atom1.0.xml')
 
 
-@pytest.fixture
+@pytest.fixture(scope='session')
 def malicious_feed():
-    filename = 'malicious.xml'
-    filepath = os.path.join(BASE_DIR, SAMPLE_FEEDS_DIR, filename)
-    with open(filepath) as f:
-        return f.read()
+    return load_feed('malicious.xml')
 
 
-def test_get_links_from_feed(atom_feed):
+@pytest.fixture(scope='session')
+def incomplete_feed():
+    return load_feed('incomplete.xml')
+
+
+@pytest.fixture(scope='session')
+def bad_url_feed():
+    return load_feed('bad_url.xml')
+
+
+def test_get_feeds_bad_url():
+    feed_url = 'http://badurl'
+    feeds = links_updater.get_feeds([feed_url])
+    assert feeds == []
+
+
+def test_render_empty_feed():
+    feed = ''
+    rendered_pages = links_updater.render_pages_from_feeds([feed])
+    assert rendered_pages == []
+
+
+def test_render_incomplete_feed(incomplete_feed):
+    feed = incomplete_feed
+    rendered_pages = links_updater.render_pages_from_feeds([feed])
+    assert rendered_pages == []
+
+
+def test_render_malicious_feed(malicious_feed):
+    feed = malicious_feed
+    rendered_pages = links_updater.render_pages_from_feeds([feed])
+    assert rendered_pages == []
+
+
+def test_render_bad_url_feed(bad_url_feed):
+    feed = bad_url_feed
+    rendered_pages = links_updater.render_pages_from_feeds([feed])
+    assert rendered_pages == []
+
+
+def test_get_links_from_good_feed(atom_feed):
     links = links_updater.get_links_from_feed(atom_feed)
     assert len(links) == 2
     for link in links:
@@ -55,6 +95,14 @@ def test_get_links_from_feed(atom_feed):
     assert links[0]['published'] == datetime.datetime(2003, 12, 13, 18, 30)
 
 
+@pytest.mark.parametrize(
+    'bad_feed', ['', '<just., non-sense', ]
+)
+def test_get_links_from_bad_feed(bad_feed):
+    links = links_updater.get_links_from_feed(bad_feed)
+    assert links == []
+
+
 def test_group_links_by_pages():
     links = [{
         'domain': 'example.org',
@@ -66,13 +114,6 @@ def test_group_links_by_pages():
     assert len(pages[0]) == 3
     assert len(pages[1]) == 3
     assert len(pages[2]) == 2
-
-
-def test_malicious_feed(malicious_feed):
-    # Check if title=</a> is escaped properly
-    should_render = '<a href="http://example.org/entry1">&lt;/a&gt;</a>'
-    rendered_pages = links_updater.render_pages_from_feeds([malicious_feed])
-    assert rendered_pages[0].find(should_render) != -1
 
 
 def test_bad_links_are_filtered():

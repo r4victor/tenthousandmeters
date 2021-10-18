@@ -10,5 +10,11 @@
     "https://www.python.org/dev/peps/peps.rss/",
     "http://probablydance.com/feed/",
     "https://randomascii.wordpress.com/feed/",
-    "https://zwischenzugs.wordpress.com/feed/"
+    "https://zwischenzugs.wordpress.com/feed/",
+    "http://blog.robertelder.org/rss",
+    "https://nullprogram.com/feed/",
+    "http://blog.reverberate.org/feeds/posts/default",
+    "http://blog.regehr.org/feed",
+    "http://feeds.feedburner.com/PythonInsider",
+    "http://www.evanjones.ca/index.rss"
 ]
