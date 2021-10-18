@@ -28,6 +28,6 @@ services:
               max-size: '10m'
               max-file: '5'
         volumes:
-            - ./website_generator/content/links:/ttm/website_generator/content/links
-            - ./output/links:/ttm/output/links
+            - ./website_generator/content/:/ttm/website_generator/content/
+            - ./output/:/ttm/output/
             - ./website_generator/links_updater/feeds.json:/ttm/website_generator/links_updater/feeds.json
