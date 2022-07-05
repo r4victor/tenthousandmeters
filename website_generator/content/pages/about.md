@@ -6,3 +6,10 @@ Right now I'm working on the [Python behind the scenes]({tag}/Python behind the 
 
 You can contact me at victor@tenthousandmeters.com
 
+## Support
+
+You can help me cover hosting expenses by signing up on [DigitalOcean with my referral link](https://m.do.co/c/fb3a14e82e13). You'll get $100 in credit, and I'll get $25. Another lucrative way to help is to buy a domain on [Gandi.net](https://gandi.link/f/ccc431ff).
+
+If you want to support the blog directly, send some BTC to this address: bc1qzg9lnrn2vkytfcrqvzwkqxas6fcgpeg4tsk5lv
+
+Thank you!
