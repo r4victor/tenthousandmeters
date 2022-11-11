@@ -2,6 +2,7 @@
 .DS_STORE
 
 /.vscode/
+**/.obsidian/
 
 **/__pycache__/
 *.py[co]
