@@ -2,7 +2,6 @@ Title: about
 
 <div class="badge-base LI-profile-badge linkedin-card" data-locale="ru_RU" data-size="medium" data-theme="light" data-type="VERTICAL" data-vanity="victor-skvortsov-a4a429137" data-version="v1"><a class="badge-base__link LI-simple-link" href="https://ru.linkedin.com/in/victor-skvortsov-a4a429137?trk=profile-badge"></a></div>
 
-
 Hello! I'm Victor. I love to explore complex systems and hard-to-grasp ideas and explain them in a simple way. This website is a place to share my explanations with everyone.
 
 I wrote the [Python behind the scenes]({tag}/Python behind the scenes) series, which is a dive into the internals of CPython, Python's interpreter.

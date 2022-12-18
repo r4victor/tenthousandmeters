@@ -1,0 +1,6 @@
+pelican[markdown]
+
+# links_updater
+feedparser
+Jinja2
+requests
