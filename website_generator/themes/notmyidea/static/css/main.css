@@ -474,3 +474,16 @@ li:last-child .hentry, #content > .hentry {border: 0; margin: 0;}
 
 	#add-comment input[type='submit'] {float: right; margin: 0 .5em;}
 	#add-comment * {margin-bottom: .5em;}
+
+/* Custom */
+body {
+	overflow: scroll; /* Show scrollbars */
+}
+
+@media (min-width: 800px) {
+	.linkedin-card {
+		float: right; 
+		margin-left: 30px;
+		margin-bottom: 15px;
+	}
+}
