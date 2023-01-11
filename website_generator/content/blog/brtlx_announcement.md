@@ -11,7 +11,7 @@ Learning a topic becomes fun once you're on a learning path, once you find good 
 
 Search engines are good at finding some stuff but fail to filter out the best. Try to google "best resources to learn python". You'll get dozens of articles recommending hundreds of resources. Which one should you pick? You may refine your query to something like "intermediate python books", but the problem remains. So you probably type "site:news.ycombinator.com" or "site:reddit.com", read reviews, and eventually do a full research on the subject.
 
-It would be cool if someone did this research for your and saved your a lot of time next time you learn something. They would learn about the topic in great detail, go through all the available resources, pick the best, and share the links, supplying each resource with a brief description of its contents and its target audience so you can quickly tell if it's for your.
+It would be cool if someone did this research for your and saved your a lot of time next time you learn something. They would learn about the topic in great detail, go through all the available resources, pick the best, and share the links, supplying each resource with a brief description of its contents and its target audience so you can quickly tell if it's for you.
 
 I thought I could be that person since I often learn new stuff and do this research anyway. So I created [bestresourcestolearnx.com](https://bestresourcestolearnx.com/) – a curated collection of best learning resources on IT topics.
 
