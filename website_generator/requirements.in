@@ -1,4 +1,5 @@
 pelican[markdown]
+pelican-render-math
 
 # links_updater
 feedparser
