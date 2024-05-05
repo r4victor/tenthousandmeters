@@ -5,7 +5,6 @@ COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
 
 COPY links_updater links_updater
-COPY plugins plugins
 COPY themes themes
 COPY pelicanconf.py entrypoint.sh ./
 
