@@ -29,7 +29,7 @@ AUTHOR_FEED_RSS = None
 SOCIAL_WIDGET_NAME = 'follow'
 # SOCIAL = (('GitHub', 'https://github.com/r4victor'),)
 
-GOOGLE_ANALYTICS = 'UA-65327549-5'
+GOOGLE_ANALYTICS = 'G-DBXG66RFRF'
 
 PATH = 'content'
 
