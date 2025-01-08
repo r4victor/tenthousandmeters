@@ -6,11 +6,12 @@ Hello! I'm Victor. I love to explore complex systems and hard-to-grasp ideas and
 
 I wrote the [Python behind the scenes]({tag}/Python behind the scenes) series, which is a dive into the internals of CPython, Python's interpreter.
 
-Another project of mine is [bestresourcestolearnx.com](https://bestresourcestolearnx.com/), where I share my favourite learning resources (books, articles, videos, courses, etc) on programming and other IT-related topics.
+Currently, I'm working on [dstack](https://github.com/dstackai/dstack).
+It's an exciting project in the GPU clouds / ML space. Think Terraform + Kubernetes for AI.
 
-Here's [my github](https://github.com/r4victor).
+## Contacts
 
-You can contact me at victor@tenthousandmeters.com
+[GitHub](https://github.com/r4victor) | [Twitter](https://x.com/_r4victor) | victor@tenthousandmeters.com
 
 ## Consulting
 
@@ -21,7 +22,5 @@ I'm always open for opportunities. Drop me a message if you have something inter
 ## Support
 
 You can help me cover hosting expenses by signing up on [DigitalOcean with my referral link](https://m.do.co/c/fb3a14e82e13). You'll get $100 in credit, and I'll get $25. Another lucrative way to help is to buy a domain on [Gandi.net](https://gandi.link/f/ccc431ff).
-
-If you want to support the blog directly, send some BTC to this address: bc1qzg9lnrn2vkytfcrqvzwkqxas6fcgpeg4tsk5lv
 
 Thank you!
