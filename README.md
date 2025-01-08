@@ -2,9 +2,9 @@
 
 ## Overview
 
-The repository contains the source code and contents for my blog [tenthousandmeters.com](https://tenthousandmeters.com). It started as a private repo but now (January 2025) I'm making it public so that everyone can make PRs, issues, and contribute.
+The repository contains the source code and contents for my blog [tenthousandmeters.com](https://tenthousandmeters.com). It started as a private repo but now (January 2025) I'm making it public so that everyone can make PRs and issues and contribute.
 
-The blog is generated with [Pelican](https://github.com/getpelican/pelican). The generated HTML then served using [nginx-le](https://github.com/nginx-le/nginx-le) deployed as a Docker container. I've set it up in 2019 and it's been working ever since.
+The blog is generated with [Pelican](https://github.com/getpelican/pelican). The generated HTML then served using [nginx-le](https://github.com/nginx-le/nginx-le) deployed as a Docker container. I've set it up in 2020 and it's been working ever since.
 
 ## Running
 
