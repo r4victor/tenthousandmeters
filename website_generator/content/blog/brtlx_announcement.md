@@ -23,3 +23,6 @@ More content is on the way. [People, keep on learning!](https://www.youtube.com/
 
 *If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
 
+<br>
+
+**Update from January 8, 2025**: [bestresourcestolearnx.com](https://bestresourcestolearnx.com/) is discontinued. What didn't work is that I set a very high bar for quality that required me to read all the material I was going to add on the website. This made the process to slow. Another reason is that LLMs partially solved the problem that search engines were struggling at. I still like the idea, though. Maybe it'll have another life in a new form.
