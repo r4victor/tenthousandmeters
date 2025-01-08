@@ -13,5 +13,9 @@ services:
             - LE_FQDN=tenthousandmeters.com
     website_generator:
         restart: always
+        # links_updater could not access internet on the bridge network,
+        # probably due to some network misconfiguration.
+        # Using host mode for now.
+        network_mode: "host"
         environment:
             - SITEURL=https://tenthousandmeters.com
