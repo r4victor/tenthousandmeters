@@ -1,12 +1,12 @@
 # SQLite Go benchmarks
 
-The source code and results of SQLite+Go benchmarks for my post SQLite concurrent writes and "database is locked" errors.
+The source code and results of SQLite+Go benchmarks for my post [SQLite concurrent writes and "database is locked" errors](https://tenthousandmeters.com/blog/sqlite-concurrent-writes-and-database-is-locked-errors/).
 
 The benchmarks are adapted from a [post by Markus Wüstenberg](https://www.golang.dk/articles/benchmarking-sqlite-performance-in-go).
 
 ## Results
 
-Note that `synchronous=full` results are not stable. I wouldn't trust the exact numbers but they are certainly worse then ``synchronous=normal`. The `synchronous=normal` results are stable across re-runs.
+Note that `synchronous=full` results are not stable. I wouldn't trust the exact numbers but they are certainly worse then `synchronous=normal`. The `synchronous=normal` results are stable across re-runs.
 
 ```
 ✗ go test -bench BenchmarkWriteDifferentSizes -benchtime=10s -cpu=1
