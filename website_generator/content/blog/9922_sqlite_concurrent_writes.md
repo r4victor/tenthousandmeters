@@ -92,9 +92,9 @@ Even after you set up an optimal SQLite configuration and optimized transactions
 First let's try inserting records of different sizes from one thread.
 On my MacBook Pro M1 2021, the default SQLite configuration in WAL mode gives the following results:
 
-| Size   | 10B   | 100B  | 1K    | 10K   | 100K  | 1MB   | 10MB  |
-|--------|-------|-------|-------|-------|-------|-------|-------|
-| op/sec | 29400 | 29323 | 25906 | 14801 | 3194  | 457   | 43    |
+| Size   | 10B   | 100B  | 1K    | 10K   | 100K | 1MB | 10MB |
+| ------ | ----- | ----- | ----- | ----- | ---- | --- | ---- |
+| op/sec | 29400 | 29323 | 25906 | 14801 | 3194 | 457 | 43   |
 
 <p style="text-align: center;">size/throughput with default WAL configuration</p>
 
@@ -112,9 +112,9 @@ Using this PRAGMA we changed how often SQLite syncs changes to the disk. Default
 
 So **you can expect SQLite to handle 70k-100k write transactions per second** for typical record sizes. Now let's see what happens when we write in parallel. In this benchmark we insert 1KB records from multiple threads:
 
-| #threads | 1     | 2     | 4     | 8     | 16    | 32    | 64    | 128   | 256   |
-|----------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
-| op/sec   | 70301 | 68823 | 66507 | 59485 | 46992 | 41599 | 43793 | 4647  | 12309 |
+| #threads | 1     | 2     | 4     | 8     | 16    | 32    | 64    | 128  | 256   |
+| -------- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ---- | ----- |
+| op/sec   | 70301 | 68823 | 66507 | 59485 | 46992 | 41599 | 43793 | 4647 | 12309 |
 
 <p style="text-align: center;">threads/throughput benched for 1s</p>
 
