@@ -1,33 +1,32 @@
-version: '3'
 services:
-    nginx:
-        image: umputun/nginx-le:v1.4.2
-        hostname: nginx
-        container_name: nginx
-        logging:
-          driver: json-file
-          options:
-              max-size: '10m'
-              max-file: '5'
-        volumes:
-            - ./nginx/etc/ssl:/etc/nginx/ssl
-            - ./nginx/etc/nginx-dev.conf:/etc/nginx/service.conf
-            - ./output:/projects/ttm
-        ports:
-            - 80:80
-        environment:
-            - TZ=UTC
-            - LETSENCRYPT=false
-    website_generator:
-        build: ./website_generator
-        image: website_generator
-        container_name: website_generator
-        logging:
-          driver: json-file
-          options:
-              max-size: '10m'
-              max-file: '5'
-        volumes:
-            - ./website_generator/content/:/ttm/website_generator/content/
-            - ./output/:/ttm/output/
-            - ./website_generator/links_updater/feeds.json:/ttm/website_generator/links_updater/feeds.json
+  nginx:
+    image: umputun/nginx-le:v1.4.2
+    hostname: nginx
+    container_name: nginx
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    volumes:
+      - ./nginx/etc/ssl:/etc/nginx/ssl
+      - ./nginx/etc/nginx-dev.conf:/etc/nginx/service.conf
+      - ./output:/projects/ttm
+    ports:
+      - 80:80
+    environment:
+      - TZ=UTC
+      - LETSENCRYPT=false
+  website_generator:
+    build: ./website_generator
+    image: website_generator
+    container_name: website_generator
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    volumes:
+      - ./website_generator/content/:/ttm/website_generator/content/
+      - ./output/:/ttm/output/
+      - ./website_generator/links_updater/feeds.json:/ttm/website_generator/links_updater/feeds.json

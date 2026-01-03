@@ -1,0 +1,14 @@
+[project]
+name = "website-generator"
+version = "0.1.0"
+description = "Static site generator for TenThousandMeters.com"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pelican[markdown]",
+    "pelican-render-math",
+    # links_updater,
+    "feedparser",
+    "Jinja2",
+    "requests",
+]

@@ -1,8 +1,8 @@
-FROM python:3.11-alpine
+FROM ghcr.io/astral-sh/uv:python3.13-alpine
 
 WORKDIR /ttm/website_generator
-COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
 
 COPY links_updater links_updater
 COPY themes themes

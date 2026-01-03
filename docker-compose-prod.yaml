@@ -1,21 +1,20 @@
-version: '3'
 services:
-    nginx:
-        restart: always
-        volumes:
-            - ./nginx/etc/nginx.conf:/etc/nginx/service.conf
-        ports:
-            - 80:80
-            - 443:443
-        environment:
-            - LETSENCRYPT=true
-            - LE_EMAIL=victor@tenthousandmeters.com
-            - LE_FQDN=tenthousandmeters.com
-    website_generator:
-        restart: always
-        # links_updater could not access internet on the bridge network,
-        # probably due to some network misconfiguration.
-        # Using host mode for now.
-        network_mode: "host"
-        environment:
-            - SITEURL=https://tenthousandmeters.com
+  nginx:
+    restart: always
+    volumes:
+      - ./nginx/etc/nginx.conf:/etc/nginx/service.conf
+    ports:
+      - 80:80
+      - 443:443
+    environment:
+      - LETSENCRYPT=true
+      - LE_EMAIL=victor@tenthousandmeters.com
+      - LE_FQDN=tenthousandmeters.com
+  website_generator:
+    restart: always
+    # links_updater could not access internet on the bridge network,
+    # probably due to some network misconfiguration.
+    # Using host mode for now.
+    network_mode: "host"
+    environment:
+      - SITEURL=https://tenthousandmeters.com
