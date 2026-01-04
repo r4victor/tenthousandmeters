@@ -930,6 +930,3 @@ We've learned a lot. Nevertheless, the Python object system is such a vast subje
 <br>
 
 *If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
-
-
-

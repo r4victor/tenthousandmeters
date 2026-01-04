@@ -1169,9 +1169,8 @@ The code for this post is available on [github](https://github.com/r4victor/pbts
 
 <br>
 
-*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+**Update from August 27, 2021**: <span id="footnote1">[1]</span> The relationship between concurrency and parallelism is more subtle. Usually, concurrency is viewed as a property of a program and parallelism as a property of a program execution. Thus, you can have "parallelism without concurrency" – even the execution of a sequentially-looking program involves [instruction-level](https://en.wikipedia.org/wiki/Instruction-level_parallelism) or [bit-level parallelism](https://en.wikipedia.org/wiki/Bit-level_parallelism). Task-level parallelism is indeed a special case of concurrency.
 
 <br>
 
-**Update from August 27, 2021**: <span id="footnote1">[1]</span> The relationship between concurrency and parallelism is more subtle. Usually, concurrency is viewed as a property of a program and parallelism as a property of a program execution. Thus, you can have "parallelism without concurrency" – even the execution of a sequentially-looking program involves [instruction-level](https://en.wikipedia.org/wiki/Instruction-level_parallelism) or [bit-level parallelism](https://en.wikipedia.org/wiki/Bit-level_parallelism). Task-level parallelism is indeed a special case of concurrency.
-
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*

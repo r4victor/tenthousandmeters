@@ -308,9 +308,8 @@ We haven't covered a lot of things. We avoided digging into the source code. The
 
 <br>
 
-*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+**Update from September 4, 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals.
 
 <br>
 
-**Update from September 4, 2020**: I've made [a list of resources]({filename}/materials/python_bts_resources.md) that I've used to learn about CPython internals.
-
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*

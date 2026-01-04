@@ -538,12 +538,6 @@ Finally, here's the steps of [`drop_gil()`](https://github.com/python/cpython/bl
 
 Note that the GIL-releasing thread doesn't need to wait for a condition in a loop. It calls `pthread_cond_wait(&gil->switch_cond, &gil->switch_mutex)` only to ensure that it doesn't reacquire the GIL immediately. If the switch occurred, this means that another thread took the GIL, and it's fine to compete for the GIL again.
 
-<br>
-
-*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
-
-<br>
-
 **Update from October 7, 2021**: <span id="footnote1">[1]</span> Restricting threads to one core doesn't really fix the convoy effect. Yes, it forces the OS to choose which of the two threads to schedule, which gives the I/O-bound thread a good chance to reacquire the GIL on an I/O-operation, but if the I/O-operation is blocking, it doesn't help. In this case the I/O-bound thread is not ready for scheduling, so the OS schedules the CPU-bound thread.
 
 In the echo server example, effectively every `recv()` is blocking – the server waits for the client to read the response and send the next message. Restricting threads to one core should not help. But we saw the RPS improved. Why is that? It's because the benchmark is flawed. I ran the client on the same machine and on the same core as the server threads. Such a setup forces the OS to choose between the server's CPU-bound thread and the client thread when the server's I/O-bound thread blocks on `recv()`. The client thread is more likely to be scheduled. It sends the next message and blocks on `recv()` too. But now the server's I/O-bound thread is ready and competes with the CPU-bound thread. Basically, running client on same core core, makes the OS to choose between the I/O-bound thread and the CPU-bound thread even on blocking `recv()`.
@@ -564,3 +558,4 @@ This project looks like the most promising attempt to remove the GIL from CPytho
 
 <br>
 
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*

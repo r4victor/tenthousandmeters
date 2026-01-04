@@ -178,5 +178,3 @@ Special thanks to Richard Hipp for SQLite and [his lecture on how it works](http
 <br>
 
 *If you have any questions, comments or suggestions, feel free to join the [GitHub discussion](https://github.com/r4victor/tenthousandmeters/discussions/3).*
-
-<br>

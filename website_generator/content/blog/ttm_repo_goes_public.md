@@ -26,5 +26,3 @@ Since the blog now has a public GitHub repo, which is an excellent place to coll
 <br>
 
 *If you have any questions, comments or suggestions, feel free to join the [GitHub discussion](https://github.com/r4victor/tenthousandmeters/discussions/1).*
-
-<br>

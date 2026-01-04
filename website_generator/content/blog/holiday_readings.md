@@ -44,5 +44,3 @@ The bonus is that Hugging Face has just published a [course on aligning models](
 <br>
 
 *If you have any questions, comments or suggestions, feel free to join the [GitHub discussion](https://github.com/r4victor/tenthousandmeters/discussions/2).*
-
-<br>

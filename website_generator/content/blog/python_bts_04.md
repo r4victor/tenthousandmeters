@@ -461,9 +461,8 @@ The most important conclusion from the post is this: if you want to study the im
 
 <br>
 
-*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
+**Update from November 10, 2020**: I was pointed out in [the comments on HN](https://news.ycombinator.com/item?id=25025451) that the `UNARY_NEGATIVE` and `GET_ITER` opcodes peek the value on top of the stack and replace it with the result instead of popping the value and pushing the result. This is indeed so. Semantically, the two approaches are equivalent. The only difference is that the pop/push approach first decrements and then increments `stack_pointer`. CPython avoids these redundant operations.
 
 <br>
 
-**Update from November 10, 2020**: I was pointed out in [the comments on HN](https://news.ycombinator.com/item?id=25025451) that the `UNARY_NEGATIVE` and `GET_ITER` opcodes peek the value on top of the stack and replace it with the result instead of popping the value and pushing the result. This is indeed so. Semantically, the two approaches are equivalent. The only difference is that the pop/push approach first decrements and then increments `stack_pointer`. CPython avoids these redundant operations.
-
+*If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*

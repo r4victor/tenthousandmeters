@@ -29,6 +29,13 @@
     <div class="entry-content">
       {% include 'article_infos.html' %}
       {{ article.content }}
+      <p>
+        <em>
+          Follow me for more content:
+          <a href="https://github.com/r4victor">GitHub</a> | <a href="https://bsky.app/profile/r4victor.bsky.social">Bluesky</a> | <a href="https://x.com/_r4victor">Twitter</a> | <a href="https://www.linkedin.com/in/victor-skvortsov-a4a429137/">LinkedIn</a>
+        </em>
+      </p>
+      <br>
     </div><!-- /.entry-content -->
     {% if DISQUS_SITENAME and SITEURL and article.status != "draft" %}
     <div class="comments">

@@ -588,4 +588,3 @@ The design of built-in types has certainly contributed to the Python's success. 
 <br>
 
 *If you have any questions, comments or suggestions, feel free to contact me at victor@tenthousandmeters.com*
-

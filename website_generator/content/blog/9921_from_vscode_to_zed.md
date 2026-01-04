@@ -113,5 +113,3 @@ Finally, my minimal Zed's settings.json in full:
 <br>
 
 *If you have any questions, comments or suggestions, feel free to join the [GitHub discussion](https://github.com/r4victor/tenthousandmeters/discussions/5).*
-
-<br>
